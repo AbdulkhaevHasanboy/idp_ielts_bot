@@ -1,6 +1,6 @@
 """
 Media handlers for processing voice messages, photos, videos, video notes, GIFs, and documents.
-Acts as a smart IDP IELTS Helper Assistant with instant Telegram Map/Venue support.
+Acts as a smart IDP IELTS Helper Assistant with multi-turn session memory and instant Telegram Map/Venue support.
 """
 import io
 import logging
@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Handles user voice messages, answers spoken questions directly,
+    Handles user voice messages, answers spoken questions directly with conversation memory,
     and automatically sends Telegram Map Venues if a city/center was asked.
     """
     user = update.effective_user
@@ -39,7 +39,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown"
     )
 
-    audio_result = await analyze_audio_with_ai(audio_bytes, mime_type="audio/ogg", lang=lang)
+    audio_result = await analyze_audio_with_ai(user.id, audio_bytes, mime_type="audio/ogg", lang=lang)
 
     try:
         await status_msg.edit_text(audio_result, parse_mode="Markdown")
@@ -80,7 +80,7 @@ async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     mime_type = update.message.audio.mime_type or "audio/mp3"
-    audio_result = await analyze_audio_with_ai(audio_bytes, mime_type=mime_type, lang=lang)
+    audio_result = await analyze_audio_with_ai(user.id, audio_bytes, mime_type=mime_type, lang=lang)
 
     try:
         await status_msg.edit_text(audio_result, parse_mode="Markdown")
@@ -119,7 +119,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown"
     )
 
-    analysis_result = await analyze_image_with_ai(image_bytes, caption=caption, lang=lang)
+    analysis_result = await analyze_image_with_ai(user.id, image_bytes, caption=caption, lang=lang)
 
     try:
         await status_msg.edit_text(analysis_result, parse_mode="Markdown")
@@ -152,7 +152,7 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     video_bytes = video_bytes_io.getvalue()
 
     mime_type = video.mime_type or "video/mp4"
-    result = await analyze_video_with_ai(video_bytes, mime_type=mime_type, caption=caption, lang=lang)
+    result = await analyze_video_with_ai(user.id, video_bytes, mime_type=mime_type, caption=caption, lang=lang)
 
     try:
         await status_msg.edit_text(result, parse_mode="Markdown")
@@ -176,7 +176,7 @@ async def handle_video_note(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await vn_file.download_to_memory(vn_bytes_io)
     vn_bytes = vn_bytes_io.getvalue()
 
-    result = await analyze_video_with_ai(vn_bytes, mime_type="video/mp4", caption="Video Note", lang=lang)
+    result = await analyze_video_with_ai(user.id, vn_bytes, mime_type="video/mp4", caption="Video Note", lang=lang)
 
     try:
         await status_msg.edit_text(result, parse_mode="Markdown")
@@ -201,7 +201,7 @@ async def handle_animation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     anim_bytes = anim_bytes_io.getvalue()
 
     mime_type = anim.mime_type or "video/mp4"
-    result = await analyze_video_with_ai(anim_bytes, mime_type=mime_type, caption=update.message.caption or "GIF", lang=lang)
+    result = await analyze_video_with_ai(user.id, anim_bytes, mime_type=mime_type, caption=update.message.caption or "GIF", lang=lang)
 
     try:
         await status_msg.edit_text(result, parse_mode="Markdown")
@@ -235,13 +235,13 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     mime_type = doc.mime_type or "application/pdf"
     if "image" in mime_type:
-        result = await analyze_image_with_ai(doc_bytes, caption=caption, lang=lang)
+        result = await analyze_image_with_ai(user.id, doc_bytes, caption=caption, lang=lang)
     elif "video" in mime_type:
-        result = await analyze_video_with_ai(doc_bytes, mime_type=mime_type, caption=caption, lang=lang)
+        result = await analyze_video_with_ai(user.id, doc_bytes, mime_type=mime_type, caption=caption, lang=lang)
     elif "audio" in mime_type:
-        result = await analyze_audio_with_ai(doc_bytes, mime_type=mime_type, lang=lang)
+        result = await analyze_audio_with_ai(user.id, doc_bytes, mime_type=mime_type, lang=lang)
     else:
-        result = await analyze_document_with_ai(doc_bytes, mime_type=mime_type, caption=caption, lang=lang)
+        result = await analyze_document_with_ai(user.id, doc_bytes, mime_type=mime_type, caption=caption, lang=lang)
 
     try:
         await status_msg.edit_text(result, parse_mode="Markdown")

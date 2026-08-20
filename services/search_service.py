@@ -1,5 +1,5 @@
 """
-Web Search service using DuckDuckGo and fallback for real-time IDP IELTS updates and user queries.
+Web Search service using DuckDuckGo with fast timeout fallback for real-time IDP IELTS updates.
 """
 import logging
 import asyncio
@@ -7,14 +7,14 @@ from ddgs import DDGS
 
 logger = logging.getLogger(__name__)
 
-async def search_web_async(query: str, max_results: int = 4, lang: str = "uz") -> list[dict]:
+async def search_web_async(query: str, max_results: int = 3, lang: str = "uz") -> list[dict]:
     """
-    Asynchronous web search for live IELTS information and query responses.
+    Asynchronous fast web search with 3-second timeout protection.
     """
     def _sync_search():
         results = []
         try:
-            with DDGS() as ddgs:
+            with DDGS(timeout=3) as ddgs:
                 raw_results = ddgs.text(query, max_results=max_results)
                 for item in raw_results:
                     title = item.get("title", "").strip()
@@ -27,11 +27,14 @@ async def search_web_async(query: str, max_results: int = 4, lang: str = "uz") -
                             "snippet": body
                         })
         except Exception as e:
-            logger.error(f"Search error for query '{query}': {e}")
+            logger.debug(f"Fast search notice for query '{query}': {e}")
         return results
 
     loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, _sync_search)
+    try:
+        return await asyncio.wait_for(loop.run_in_executor(None, _sync_search), timeout=3.5)
+    except Exception:
+        return []
 
 def format_search_results(query: str, results: list[dict], lang: str = "uz") -> str:
     if not results:

@@ -365,8 +365,9 @@ _{card['ielts_sentence']}_"""
         )
         return
 
-    # 5. Intelligent AI Chat Response (Conversational, IELTS Expertise, Real-Time facts)
+    # 5. Intelligent AI Chat Response (Conversational, IELTS Expertise, Real-Time facts, Multi-turn Context)
     ai_response = await generate_ai_chat_response(
+        user_id=user.id,
         user_text=text,
         user_name=user.first_name or "Candidate",
         lang=lang

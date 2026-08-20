@@ -1,8 +1,11 @@
 """
 Comprehensive Gemini AI Service for IDP IELTS Bot.
 Customer Support & IELTS Helper Assistant for IDP IELTS Uzbekistan (Edu-Action).
-Powered by Google Gemini 3.1 & 3.5 series with automatic real-time web search verification,
-multi-key rotation, failover, and exponential retry.
+Powered by Google Gemini 3.1 & 3.5 series with:
+- Per-user multi-turn conversation memory (up to 100 turns, 15-20 min sliding window)
+- Real-time silent background web search verification
+- Multi-key rotation and automatic quota failover
+- Voice, image, video, and document understanding
 """
 import logging
 import io
@@ -14,13 +17,22 @@ from google.genai import types
 
 from config import SUPPORT_USERNAME, SUPPORT_PHONE
 from services.search_service import search_web_async
+from services.chat_session import (
+    add_message_to_session,
+    build_gemini_history_contents,
+    init_history_table
+)
 
 logger = logging.getLogger(__name__)
 
+# Initialize history database table on import
+init_history_table()
+
 SYSTEM_PROMPT = f"""You are 'IDP IELTS AI', the official smart helper & customer support assistant for IDP IELTS in Uzbekistan (Edu-Action).
 
-OFFICIAL VERIFIED KNOWLEDGE BASE:
+OFFICIAL VERIFIED KNOWLEDGE BASE (100% ACCURATE):
 - Standard IELTS Academic / General Training (Computer): 2,664,000 UZS (~$205 USD).
+- Standard IELTS on Paper (Academic / General Training): 2,664,000 UZS.
 - IELTS for UKVI (Academic / General Training): 2,980,000 UZS.
 - IELTS Life Skills (A1 / B1): 2,627,000 UZS.
 - One Skill Retake (OSR): 1,850,000 UZS.
@@ -32,12 +44,13 @@ OFFICIAL VERIFIED KNOWLEDGE BASE:
 
 CRITICAL ROLE & COMMUNICATION RULES:
 1. You are a HELPFUL CUSTOMER SUPPORT ASSISTANT, NOT an examiner, tester, or robotic evaluator.
-2. When answering user voice messages or text, listen to what they are asking and directly solve their request in a natural, polite, and concise manner.
-3. ALWAYS check the real-time search context provided. If there is live information, synthesize it cleanly without mentioning "I searched Google".
-4. When relevant to exam fees or registration, politely ask: "Are you planning to take Academic or General Training? Which city in Uzbekistan do you plan to take the test in?" so you can guide them to their nearest center or test dates.
-5. NEVER dump unsolicited long boilerplate lists, generic FAQ dumps, or unrelated test center information.
-6. Language: Respond in the language of the user (Uzbek by default, Russian, or English).
-7. Only perform formal IELTS criteria grading (Task Achievement, Fluency, etc.) if the user explicitly asks to check/grade their essay or mock speaking.
+2. Conversation Continuity: You have full memory of previous messages in this conversation. When the user asks follow-up questions (e.g. "what about PC test", "how much is it?", "where is it located?"), understand the exact context from previous turns!
+3. Accurate Pricing: Always quote the exact verified price (e.g. 2,664,000 UZS for both Computer and Paper IELTS). NEVER give outdated 2,350,000 numbers.
+4. ALWAYS check the real-time search context provided. If there is live information, synthesize it cleanly without mentioning "I searched Google".
+5. When relevant to exam fees or registration, politely ask: "Are you planning to take Academic or General Training? Which city in Uzbekistan do you plan to take the test in?" so you can guide them to their nearest center or test dates.
+6. NEVER dump unsolicited long boilerplate lists, generic FAQ dumps, or unrelated test center information. Keep answers focused, natural, and helpful.
+7. Language: Respond in the language of the user (Uzbek by default, Russian, or English).
+8. Only perform formal IELTS criteria grading (Task Achievement, Fluency, etc.) if the user explicitly asks to check/grade their essay or mock speaking.
 """
 
 MODELS_CASCADE = [
@@ -76,16 +89,15 @@ def get_genai_clients():
             
     return clients
 
-async def generate_ai_chat_response(user_text: str, user_name: str = "Candidate", lang: str = "uz") -> str:
+async def generate_ai_chat_response(user_id: int, user_text: str, user_name: str = "Candidate", lang: str = "uz") -> str:
     """
-    Generates natural, concise AI response with automatic real-time web search verification.
+    Generates natural, concise AI response with multi-turn session memory and real-time search.
     """
     clients = get_genai_clients()
     if not clients:
         return f"Assalomu alaykum! IDP IELTS bo'yicha qanday savolingiz bor? Qo'llab-quvvatlash: {SUPPORT_USERNAME}" if lang=="uz" else f"Здравствуйте! Чем могу помочь по IDP IELTS? Поддержка: {SUPPORT_USERNAME}"
 
     lower = user_text.lower()
-    # Broad trigger for silent background verification
     is_simple_greeting = lower in ["salom", "assalomu alaykum", "hello", "hi", "hey", "privet", "privyet", "qalesiz", "qalaysiz"]
     
     search_context = ""
@@ -99,12 +111,15 @@ async def generate_ai_chat_response(user_text: str, user_name: str = "Candidate"
         except Exception as e:
             logger.debug(f"Silent search notice: {e}")
 
-    prompt = f"""User name: {user_name}
+    current_prompt = f"""User name: {user_name}
 User language: {lang}
 User message: {user_text}
 {search_context}
 
 Provide a concise, helpful, and natural response directly answering the user in {lang}. Ensure all facts (prices, rules, locations) are 100% accurate. Support member username: {SUPPORT_USERNAME}."""
+
+    # Build full multi-turn conversation history for this specific user
+    full_contents = build_gemini_history_contents(user_id, current_prompt)
 
     def _call():
         for attempt in range(3):
@@ -113,7 +128,7 @@ Provide a concise, helpful, and natural response directly answering the user in 
                     try:
                         response = client.models.generate_content(
                             model=m,
-                            contents=prompt,
+                            contents=full_contents,
                             config=types.GenerateContentConfig(
                                 system_instruction=SYSTEM_PROMPT,
                                 temperature=0.6,
@@ -128,7 +143,11 @@ Provide a concise, helpful, and natural response directly answering the user in 
 
     loop = asyncio.get_running_loop()
     res = await loop.run_in_executor(None, _call)
+    
     if res:
+        # Save both user question and bot answer to this user's active session
+        add_message_to_session(user_id, "user", user_text)
+        add_message_to_session(user_id, "model", res)
         return res
 
     if lang == "uz":
@@ -138,9 +157,9 @@ Provide a concise, helpful, and natural response directly answering the user in 
     else:
         return f"Hello! How can I assist you? Telegram Support: {SUPPORT_USERNAME}"
 
-async def analyze_audio_with_ai(audio_bytes: bytes, mime_type: str = "audio/ogg", lang: str = "uz") -> str:
+async def analyze_audio_with_ai(user_id: int, audio_bytes: bytes, mime_type: str = "audio/ogg", lang: str = "uz") -> str:
     """
-    Understands and answers spoken voice inquiries from users as an IDP IELTS Helper.
+    Understands and answers spoken voice inquiries with multi-turn session memory.
     """
     clients = get_genai_clients()
     if not clients:
@@ -151,7 +170,7 @@ Listen to this user's voice message.
 Respond in {lang}.
 
 OFFICIAL FACTS:
-- Standard IELTS (Computer): 2,664,000 UZS (~$205 USD).
+- Standard IELTS (Computer / Paper): 2,664,000 UZS (~$205 USD).
 - IELTS for UKVI: 2,980,000 UZS.
 - IELTS Life Skills: 2,627,000 UZS.
 - State Compensation: Band 7.0+ (C1) gets 100% reimbursed via my.gov.uz.
@@ -166,6 +185,9 @@ RULES:
 5. If they specifically asked to evaluate their English speaking practice, provide constructive advice. Otherwise, JUST ANSWER THEIR QUESTION directly!
 """
 
+    audio_part = types.Part.from_bytes(data=audio_bytes, mime_type=mime_type)
+    full_contents = build_gemini_history_contents(user_id, instruction, current_parts=[audio_part])
+
     def _call_audio():
         for attempt in range(3):
             for client in clients:
@@ -173,10 +195,7 @@ RULES:
                     try:
                         response = client.models.generate_content(
                             model=m,
-                            contents=[
-                                types.Part.from_bytes(data=audio_bytes, mime_type=mime_type),
-                                instruction
-                            ],
+                            contents=full_contents,
                             config=types.GenerateContentConfig(
                                 system_instruction=SYSTEM_PROMPT,
                                 temperature=0.4,
@@ -191,14 +210,17 @@ RULES:
 
     loop = asyncio.get_running_loop()
     res = await loop.run_in_executor(None, _call_audio)
+    
     if res:
+        add_message_to_session(user_id, "user", "[Voice Message Inquiry]")
+        add_message_to_session(user_id, "model", res)
         return res
 
     return "⚠️ Ovozli xabarni tushunishda xatolik yuz berdi. Iltimos, qaytadan yuboring." if lang=="uz" else "⚠️ Error processing voice message."
 
-async def analyze_image_with_ai(image_bytes: bytes, caption: str = "", lang: str = "uz") -> str:
+async def analyze_image_with_ai(user_id: int, image_bytes: bytes, caption: str = "", lang: str = "uz") -> str:
     """
-    Multimodal analysis of images using Gemini as a helper assistant.
+    Multimodal analysis of images with multi-turn session memory.
     """
     clients = get_genai_clients()
     if not clients:
@@ -232,6 +254,9 @@ D. If it is an IELTS TRF / Certificate / Score Report:
 User caption: {caption}
 """
 
+    img_part = types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg")
+    full_contents = build_gemini_history_contents(user_id, instruction, current_parts=[img_part])
+
     def _call_vision():
         for attempt in range(3):
             for client in clients:
@@ -239,10 +264,7 @@ User caption: {caption}
                     try:
                         response = client.models.generate_content(
                             model=m,
-                            contents=[
-                                types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg"),
-                                instruction
-                            ],
+                            contents=full_contents,
                             config=types.GenerateContentConfig(
                                 system_instruction=SYSTEM_PROMPT,
                                 temperature=0.3,
@@ -257,14 +279,17 @@ User caption: {caption}
 
     loop = asyncio.get_running_loop()
     res = await loop.run_in_executor(None, _call_vision)
+    
     if res:
+        add_message_to_session(user_id, "user", f"[Uploaded Image] {caption}")
+        add_message_to_session(user_id, "model", res)
         return res
 
     return "⚠️ Rasmni tahlil qilishda xatolik yuz berdi. Iltimos, qayta yuboring." if lang=="uz" else "⚠️ Error analyzing image."
 
-async def analyze_video_with_ai(video_bytes: bytes, mime_type: str = "video/mp4", caption: str = "", lang: str = "uz") -> str:
+async def analyze_video_with_ai(user_id: int, video_bytes: bytes, mime_type: str = "video/mp4", caption: str = "", lang: str = "uz") -> str:
     """
-    Analyzes video notes, short video clips, or GIFs.
+    Analyzes video notes, short video clips, or GIFs with multi-turn session memory.
     """
     clients = get_genai_clients()
     if not clients:
@@ -285,6 +310,9 @@ RULES:
    - Politely remind user of IDP IELTS features and support!
 """
 
+    vid_part = types.Part.from_bytes(data=video_bytes, mime_type=mime_type)
+    full_contents = build_gemini_history_contents(user_id, instruction, current_parts=[vid_part])
+
     def _call_video():
         for attempt in range(3):
             for client in clients:
@@ -292,10 +320,7 @@ RULES:
                     try:
                         response = client.models.generate_content(
                             model=m,
-                            contents=[
-                                types.Part.from_bytes(data=video_bytes, mime_type=mime_type),
-                                instruction
-                            ],
+                            contents=full_contents,
                             config=types.GenerateContentConfig(
                                 system_instruction=SYSTEM_PROMPT,
                                 temperature=0.4,
@@ -310,14 +335,17 @@ RULES:
 
     loop = asyncio.get_running_loop()
     res = await loop.run_in_executor(None, _call_video)
+    
     if res:
+        add_message_to_session(user_id, "user", f"[Video Clip] {caption}")
+        add_message_to_session(user_id, "model", res)
         return res
 
     return "⚠️ Videoni tahlil qilishda xatolik yuz berdi." if lang=="uz" else "⚠️ Error analyzing video."
 
-async def analyze_document_with_ai(doc_bytes: bytes, mime_type: str = "application/pdf", caption: str = "", lang: str = "uz") -> str:
+async def analyze_document_with_ai(user_id: int, doc_bytes: bytes, mime_type: str = "application/pdf", caption: str = "", lang: str = "uz") -> str:
     """
-    Analyzes document files (PDF essays, practice tests, TRF certificates, text files).
+    Analyzes document files with multi-turn session memory.
     """
     clients = get_genai_clients()
     if not clients:
@@ -338,6 +366,9 @@ RULES:
    - Briefly summarize what it is in 2 sentences, and remind user of IELTS features.
 """
 
+    doc_part = types.Part.from_bytes(data=doc_bytes, mime_type=mime_type)
+    full_contents = build_gemini_history_contents(user_id, instruction, current_parts=[doc_part])
+
     def _call_doc():
         for attempt in range(3):
             for client in clients:
@@ -345,10 +376,7 @@ RULES:
                     try:
                         response = client.models.generate_content(
                             model=m,
-                            contents=[
-                                types.Part.from_bytes(data=doc_bytes, mime_type=mime_type),
-                                instruction
-                            ],
+                            contents=full_contents,
                             config=types.GenerateContentConfig(
                                 system_instruction=SYSTEM_PROMPT,
                                 temperature=0.3,
@@ -363,7 +391,10 @@ RULES:
 
     loop = asyncio.get_running_loop()
     res = await loop.run_in_executor(None, _call_doc)
+    
     if res:
+        add_message_to_session(user_id, "user", f"[Document File] {caption}")
+        add_message_to_session(user_id, "model", res)
         return res
 
     return "⚠️ Hujjatni tahlil qilishda xatolik yuz berdi." if lang=="uz" else "⚠️ Error analyzing document."
