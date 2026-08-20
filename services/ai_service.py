@@ -1,7 +1,7 @@
 """
 Comprehensive Gemini AI Service for IDP IELTS Bot.
-Handles concise, intelligent conversation, background web search integration,
-and precise multimodal image & voice assessment without unsolicited boilerplate.
+Supports Gemini 3.1 Flash Live Preview & Gemini multimodal generation for chat,
+live background search, images, handwritten essays, and audio voice examination.
 """
 import logging
 import io
@@ -14,9 +14,6 @@ from services.search_service import search_web_async
 
 logger = logging.getLogger(__name__)
 
-# Initialize GenAI Client
-client = genai.Client(api_key=GEMINI_API_KEY)
-
 SYSTEM_PROMPT = f"""You are 'IDP IELTS AI', an elite, concise, and highly helpful AI assistant for IDP IELTS in Uzbekistan (Edu-Action).
 
 CRITICAL COMMUNICATION RULES:
@@ -27,12 +24,27 @@ CRITICAL COMMUNICATION RULES:
 5. If a question requires live factual verification (dates, university acceptance, recent news), silently search in background and integrate the answer without mentioning you searched.
 """
 
+def get_genai_client():
+    api_key = GEMINI_API_KEY
+    if not api_key:
+        import os
+        from dotenv import load_dotenv
+        load_dotenv()
+        api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        return None
+    return genai.Client(api_key=api_key)
+
 async def generate_ai_chat_response(user_text: str, user_name: str = "Candidate", lang: str = "uz") -> str:
     """
-    Generates natural, concise AI response. Searches in background only if needed.
+    Generates natural, concise AI response using Gemini 3.1 Flash Live / Gemini model.
+    Searches in background only if real-time facts are needed.
     """
+    client = get_genai_client()
+    if not client:
+        return "Assalomu alaykum! IDP IELTS bo'yicha qanday savolingiz bor? Qo'llab-quvvatlash: @idp555" if lang=="uz" else "Здравствуйте! Чем могу помочь по IDP IELTS? Поддержка: @idp555"
+
     lower = user_text.lower()
-    
     needs_search = any(k in lower for k in [
         "qachon", "sana", "dates", "2026", "2025", "yangi", "latest", "yangilik",
         "universitet", "university", "tan oladimi", "accept", "qaysi davlat"
@@ -56,38 +68,68 @@ User message: {user_text}
 
 Provide a concise, helpful, and natural response directly answering the user in {lang}. Do not dump unprompted generic lists. Support member username: {SUPPORT_USERNAME}."""
 
-    def _call_gemini():
+    # Try Gemini Live API first if model is live preview, otherwise fallback to generate_content
+    if "live" in GEMINI_MODEL:
         try:
-            response = client.models.generate_content(
+            async with client.aio.live.connect(
                 model=GEMINI_MODEL,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    system_instruction=SYSTEM_PROMPT,
-                    temperature=0.7,
+                config=types.LiveConnectConfig(
+                    system_instruction=types.Content(parts=[types.Part.from_text(text=SYSTEM_PROMPT)])
                 )
-            )
-            return response.text.strip()
+            ) as session:
+                await session.send_realtime_input(text=prompt)
+                full_text = ""
+                async for response in session.receive():
+                    server_content = response.server_content
+                    if server_content and server_content.model_turn:
+                        for part in server_content.model_turn.parts:
+                            if part.text:
+                                full_text += part.text
+                    if server_content and server_content.turn_complete:
+                        break
+                if full_text.strip():
+                    return full_text.strip()
         except Exception as e:
-            logger.error(f"Gemini chat error: {e}")
-            if lang == "uz":
-                return f"Assalomu alaykum! Savolingiz bo'yicha yordam berishdan mamnunman. Qo'llab-quvvatlash xodimimiz: {SUPPORT_USERNAME}"
-            elif lang == "ru":
-                return f"Здравствуйте! Рад помочь вам. Поддержка в Telegram: {SUPPORT_USERNAME}"
-            else:
-                return f"Hello! How can I assist you? Telegram Support: {SUPPORT_USERNAME}"
+            logger.warning(f"Live API chat error ({GEMINI_MODEL}): {e}. Trying generate_content fallback...")
+
+    # Fallback to generate_content with standard models
+    def _call_gemini_fallback():
+        models_to_try = ["gemini-2.5-flash", "gemini-3.5-flash"]
+        for m in models_to_try:
+            try:
+                response = client.models.generate_content(
+                    model=m,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        system_instruction=SYSTEM_PROMPT,
+                        temperature=0.7,
+                    )
+                )
+                return response.text.strip()
+            except Exception as ex:
+                logger.error(f"Model {m} error: {ex}")
+        return None
 
     loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, _call_gemini)
+    res = await loop.run_in_executor(None, _call_gemini_fallback)
+    if res:
+        return res
+
+    if lang == "uz":
+        return f"Assalomu alaykum! Savolingiz bo'yicha yordam berishdan mamnunman. Qo'llab-quvvatlash xodimimiz: {SUPPORT_USERNAME}"
+    elif lang == "ru":
+        return f"Здравствуйте! Рад помочь вам. Поддержка в Telegram: {SUPPORT_USERNAME}"
+    else:
+        return f"Hello! How can I assist you? Telegram Support: {SUPPORT_USERNAME}"
 
 async def analyze_image_with_ai(image_bytes: bytes, caption: str = "", lang: str = "uz") -> str:
     """
-    Analyzes images concisely:
-    - Identifies what the image is.
-    - If non-IELTS: states what it is clearly and explains what the user can do next (2-3 sentences, NO generic lists).
-    - If IELTS Essay: evaluates band score, 4 criteria, grammar corrections, and Band 9 rewrite.
-    - If IELTS question/task: solves and explains reasoning.
-    - If TRF / certificate: explains scores and validity.
+    Multimodal analysis of images using Gemini 3.1 Flash Live Preview / Gemini Vision.
     """
+    client = get_genai_client()
+    if not client:
+        return "⚠️ API kalit sozlanmagan."
+
     instruction = f"""Analyze the provided image in detail.
 Language for response: {lang}
 
@@ -96,17 +138,13 @@ IMPORTANT RULES:
 2. Then, state WHAT should be done with it:
 
 A. If it is UNRELATED to IELTS (e.g. a barcode, object, random photo, invoice, meme):
-   - State exactly what it depicts (e.g. "Ushbu rasmda mahsulot shtrix-kodi (barcode: 5 449000 286932) tasvirlangan.").
+   - State exactly what it depicts (e.g. "Ushbu rasmda mahsulot shtrix-kodi (barcode) tasvirlangan.").
    - Explain that it is not an IELTS test material.
    - Explain what they can do with the bot instead: if they want to check their IELTS Writing essay, speaking task, reading/listening question, or TRF certificate, they can send that photo and get a complete band score evaluation.
    - CRITICAL: DO NOT dump generic bullet points or test center lists! Keep it short (2-4 sentences).
 
 B. If it is an IELTS Writing Essay (handwritten or typed):
-   - Evaluate against the 4 official criteria:
-     * Task Achievement / Response (0-9)
-     * Coherence & Cohesion (0-9)
-     * Lexical Resource (0-9)
-     * Grammatical Range & Accuracy (0-9)
+   - Evaluate against the 4 official criteria: Task Achievement (0-9), Coherence & Cohesion (0-9), Lexical Resource (0-9), Grammatical Range & Accuracy (0-9).
    - Estimated Overall Band Score.
    - Exact grammar/vocabulary mistakes with Band 9 corrections.
    - Actionable tips to improve.
@@ -117,39 +155,72 @@ C. If it is an IELTS Reading / Listening / Writing Task question or Graph/Chart:
 D. If it is an IELTS TRF / Certificate / Score Report:
    - Read the scores, explain CEFR level and university admission requirements.
 
-User caption (if any): {caption}
+User caption: {caption}
 """
 
-    def _call_gemini_vision():
+    # Try Live API first if model is live preview
+    if "live" in GEMINI_MODEL:
         try:
-            response = client.models.generate_content(
+            async with client.aio.live.connect(
                 model=GEMINI_MODEL,
-                contents=[
-                    types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg"),
-                    instruction
-                ],
-                config=types.GenerateContentConfig(
-                    system_instruction=SYSTEM_PROMPT,
-                    temperature=0.3,
+                config=types.LiveConnectConfig(
+                    system_instruction=types.Content(parts=[types.Part.from_text(text=SYSTEM_PROMPT)])
                 )
-            )
-            return response.text.strip()
+            ) as session:
+                await session.send_realtime_input(
+                    media_chunks=[types.Blob(data=image_bytes, mime_type="image/jpeg")],
+                    text=instruction
+                )
+                full_text = ""
+                async for response in session.receive():
+                    server_content = response.server_content
+                    if server_content and server_content.model_turn:
+                        for part in server_content.model_turn.parts:
+                            if part.text:
+                                full_text += part.text
+                    if server_content and server_content.turn_complete:
+                        break
+                if full_text.strip():
+                    return full_text.strip()
         except Exception as e:
-            logger.error(f"Gemini vision error: {e}")
-            if lang == "uz":
-                return "⚠️ Rasmni tahlil qilishda xatolik yuz berdi. Iltimos, qayta yuboring."
-            elif lang == "ru":
-                return "⚠️ Ошибка при анализе изображения. Пожалуйста, отправьте фото еще раз."
-            else:
-                return "⚠️ Error analyzing the image. Please try uploading again."
+            logger.warning(f"Live API image error ({GEMINI_MODEL}): {e}. Trying generate_content fallback...")
+
+    # Fallback to standard multimodal generate_content
+    def _call_gemini_vision_fallback():
+        models_to_try = ["gemini-2.5-flash", "gemini-3.5-flash"]
+        for m in models_to_try:
+            try:
+                response = client.models.generate_content(
+                    model=m,
+                    contents=[
+                        types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg"),
+                        instruction
+                    ],
+                    config=types.GenerateContentConfig(
+                        system_instruction=SYSTEM_PROMPT,
+                        temperature=0.3,
+                    )
+                )
+                return response.text.strip()
+            except Exception as ex:
+                logger.error(f"Vision model {m} error: {ex}")
+        return None
 
     loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, _call_gemini_vision)
+    res = await loop.run_in_executor(None, _call_gemini_vision_fallback)
+    if res:
+        return res
+
+    return "⚠️ Rasmni tahlil qilishda xatolik yuz berdi. Iltimos, qayta yuboring." if lang=="uz" else "⚠️ Error analyzing image."
 
 async def analyze_audio_with_ai(audio_bytes: bytes, mime_type: str = "audio/ogg", lang: str = "uz") -> str:
     """
-    Analyzes speaking practice audio recordings concisely and constructively.
+    Analyzes speaking practice audio recordings using Gemini Live / Gemini Audio.
     """
+    client = get_genai_client()
+    if not client:
+        return "⚠️ API kalit sozlanmagan."
+
     instruction = f"""You are a certified IELTS Speaking Examiner.
 Listen to this candidate's speaking audio recording.
 Respond in {lang}.
@@ -165,28 +236,55 @@ Structure:
 4. 💡 *Band 8+ ga chiqish uchun 2-3 ta aniq maslahat*.
 """
 
-    def _call_gemini_audio():
+    if "live" in GEMINI_MODEL:
         try:
-            response = client.models.generate_content(
+            async with client.aio.live.connect(
                 model=GEMINI_MODEL,
-                contents=[
-                    types.Part.from_bytes(data=audio_bytes, mime_type=mime_type),
-                    instruction
-                ],
-                config=types.GenerateContentConfig(
-                    system_instruction=SYSTEM_PROMPT,
-                    temperature=0.3,
+                config=types.LiveConnectConfig(
+                    system_instruction=types.Content(parts=[types.Part.from_text(text=SYSTEM_PROMPT)])
                 )
-            )
-            return response.text.strip()
+            ) as session:
+                await session.send_realtime_input(
+                    media_chunks=[types.Blob(data=audio_bytes, mime_type=mime_type)],
+                    text=instruction
+                )
+                full_text = ""
+                async for response in session.receive():
+                    server_content = response.server_content
+                    if server_content and server_content.model_turn:
+                        for part in server_content.model_turn.parts:
+                            if part.text:
+                                full_text += part.text
+                    if server_content and server_content.turn_complete:
+                        break
+                if full_text.strip():
+                    return full_text.strip()
         except Exception as e:
-            logger.error(f"Gemini audio error: {e}")
-            if lang == "uz":
-                return "⚠️ Ovozli xabarni tahlil qilishda xatolik yuz berdi. Iltimos, qaytadan yozib yuboring."
-            elif lang == "ru":
-                return "⚠️ Ошибка при анализе аудио. Пожалуйста, попробуйте записать еще раз."
-            else:
-                return "⚠️ Error analyzing audio recording. Please try recording again."
+            logger.warning(f"Live API audio error ({GEMINI_MODEL}): {e}. Trying generate_content fallback...")
+
+    def _call_gemini_audio_fallback():
+        models_to_try = ["gemini-2.5-flash", "gemini-3.5-flash"]
+        for m in models_to_try:
+            try:
+                response = client.models.generate_content(
+                    model=m,
+                    contents=[
+                        types.Part.from_bytes(data=audio_bytes, mime_type=mime_type),
+                        instruction
+                    ],
+                    config=types.GenerateContentConfig(
+                        system_instruction=SYSTEM_PROMPT,
+                        temperature=0.3,
+                    )
+                )
+                return response.text.strip()
+            except Exception as ex:
+                logger.error(f"Audio model {m} error: {ex}")
+        return None
 
     loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, _call_gemini_audio)
+    res = await loop.run_in_executor(None, _call_gemini_audio_fallback)
+    if res:
+        return res
+
+    return "⚠️ Ovozli xabarni tahlil qilishda xatolik yuz berdi. Iltimos, qaytadan yozib yuboring." if lang=="uz" else "⚠️ Error analyzing audio."
