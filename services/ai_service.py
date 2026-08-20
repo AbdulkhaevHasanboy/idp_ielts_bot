@@ -1,17 +1,18 @@
 """
 Comprehensive Gemini AI Service for IDP IELTS Bot.
-Powered by Google Gemini 3.1 & 3.5 series with automatic retry, backoff, and multi-model failover
-for instant text chat, real-time background search, image analysis, IELTS Speaking voice notes,
-video notes, GIFs, and PDF documents.
+Powered by Google Gemini 3.1 & 3.5 series with automatic multi-key rotation, failover,
+and exponential retry for instant text chat, real-time background search, image analysis,
+IELTS Speaking voice notes, video notes, GIFs, and PDF documents.
 """
 import logging
 import io
 import time
 import asyncio
+import os
 from google import genai
 from google.genai import types
 
-from config import GEMINI_API_KEY, GEMINI_MODEL, SUPPORT_USERNAME, SUPPORT_PHONE
+from config import SUPPORT_USERNAME, SUPPORT_PHONE
 from services.search_service import search_web_async
 
 logger = logging.getLogger(__name__)
@@ -26,7 +27,6 @@ CRITICAL COMMUNICATION RULES:
 5. If a question requires live factual verification (dates, university acceptance, recent news), silently search in background and integrate the answer without mentioning you searched.
 """
 
-# Cascade of high-performance models
 MODELS_CASCADE = [
     "gemini-3.1-flash-lite",
     "gemini-3.5-flash",
@@ -34,21 +34,44 @@ MODELS_CASCADE = [
     "gemini-2.5-flash"
 ]
 
-def get_genai_client():
-    import os
+def get_genai_clients():
+    """
+    Returns a list of genai.Client instances configured for all available API keys.
+    Supports GEMINI_API_KEYS (comma-separated), GEMINI_API_KEY, GEMINI_API_KEY_2, etc.
+    """
     from dotenv import load_dotenv
     load_dotenv()
-    api_key = os.getenv("GEMINI_API_KEY") or GEMINI_API_KEY
-    if not api_key:
-        return None
-    return genai.Client(api_key=api_key)
+    
+    keys = []
+    # 1. Comma separated keys
+    raw_keys = os.getenv("GEMINI_API_KEYS", "")
+    if raw_keys:
+        for k in raw_keys.split(","):
+            k = k.strip()
+            if k and k not in keys:
+                keys.append(k)
+    
+    # 2. Individual key variables
+    for env_var in ["GEMINI_API_KEY", "GEMINI_API_KEY_2", "GEMINI_API_KEY_3"]:
+        val = os.getenv(env_var, "").strip()
+        if val and val not in keys:
+            keys.append(val)
+            
+    clients = []
+    for k in keys:
+        try:
+            clients.append(genai.Client(api_key=k))
+        except Exception as e:
+            logger.error(f"Error creating client for key: {e}")
+            
+    return clients
 
 async def generate_ai_chat_response(user_text: str, user_name: str = "Candidate", lang: str = "uz") -> str:
     """
-    Generates natural, concise AI response with automatic failover and retry.
+    Generates natural, concise AI response with automatic multi-key rotation and failover.
     """
-    client = get_genai_client()
-    if not client:
+    clients = get_genai_clients()
+    if not clients:
         return f"Assalomu alaykum! IDP IELTS bo'yicha qanday savolingiz bor? Qo'llab-quvvatlash: {SUPPORT_USERNAME}" if lang=="uz" else f"Здравствуйте! Чем могу помочь по IDP IELTS? Поддержка: {SUPPORT_USERNAME}"
 
     lower = user_text.lower()
@@ -77,20 +100,21 @@ Provide a concise, helpful, and natural response directly answering the user in 
 
     def _call():
         for attempt in range(3):
-            for m in MODELS_CASCADE:
-                try:
-                    response = client.models.generate_content(
-                        model=m,
-                        contents=prompt,
-                        config=types.GenerateContentConfig(
-                            system_instruction=SYSTEM_PROMPT,
-                            temperature=0.7,
+            for client in clients:
+                for m in MODELS_CASCADE:
+                    try:
+                        response = client.models.generate_content(
+                            model=m,
+                            contents=prompt,
+                            config=types.GenerateContentConfig(
+                                system_instruction=SYSTEM_PROMPT,
+                                temperature=0.7,
+                            )
                         )
-                    )
-                    if response and response.text:
-                        return response.text.strip()
-                except Exception as ex:
-                    logger.debug(f"Chat attempt {attempt} model {m} notice: {ex}")
+                        if response and response.text:
+                            return response.text.strip()
+                    except Exception as ex:
+                        logger.debug(f"Chat attempt {attempt} model {m} notice: {ex}")
             time.sleep(1.0)
         return None
 
@@ -108,10 +132,10 @@ Provide a concise, helpful, and natural response directly answering the user in 
 
 async def analyze_image_with_ai(image_bytes: bytes, caption: str = "", lang: str = "uz") -> str:
     """
-    Multimodal analysis of images using Gemini with automatic retry.
+    Multimodal analysis of images using Gemini with multi-key failover.
     """
-    client = get_genai_client()
-    if not client:
+    clients = get_genai_clients()
+    if not clients:
         return "⚠️ API kalit sozlanmagan."
 
     instruction = f"""Analyze the provided image in detail.
@@ -144,23 +168,24 @@ User caption: {caption}
 
     def _call_vision():
         for attempt in range(3):
-            for m in MODELS_CASCADE:
-                try:
-                    response = client.models.generate_content(
-                        model=m,
-                        contents=[
-                            types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg"),
-                            instruction
-                        ],
-                        config=types.GenerateContentConfig(
-                            system_instruction=SYSTEM_PROMPT,
-                            temperature=0.3,
+            for client in clients:
+                for m in MODELS_CASCADE:
+                    try:
+                        response = client.models.generate_content(
+                            model=m,
+                            contents=[
+                                types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg"),
+                                instruction
+                            ],
+                            config=types.GenerateContentConfig(
+                                system_instruction=SYSTEM_PROMPT,
+                                temperature=0.3,
+                            )
                         )
-                    )
-                    if response and response.text:
-                        return response.text.strip()
-                except Exception as ex:
-                    logger.debug(f"Vision attempt {attempt} model {m} notice: {ex}")
+                        if response and response.text:
+                            return response.text.strip()
+                    except Exception as ex:
+                        logger.debug(f"Vision attempt {attempt} model {m} notice: {ex}")
             time.sleep(1.0)
         return None
 
@@ -173,10 +198,10 @@ User caption: {caption}
 
 async def analyze_audio_with_ai(audio_bytes: bytes, mime_type: str = "audio/ogg", lang: str = "uz") -> str:
     """
-    Analyzes speaking practice audio recordings with full criteria evaluation and retry.
+    Analyzes speaking practice audio recordings with multi-key failover.
     """
-    client = get_genai_client()
-    if not client:
+    clients = get_genai_clients()
+    if not clients:
         return "⚠️ API kalit sozlanmagan."
 
     instruction = f"""You are a certified IELTS Speaking Examiner.
@@ -196,23 +221,24 @@ Structure:
 
     def _call_audio():
         for attempt in range(3):
-            for m in MODELS_CASCADE:
-                try:
-                    response = client.models.generate_content(
-                        model=m,
-                        contents=[
-                            types.Part.from_bytes(data=audio_bytes, mime_type=mime_type),
-                            instruction
-                        ],
-                        config=types.GenerateContentConfig(
-                            system_instruction=SYSTEM_PROMPT,
-                            temperature=0.3,
+            for client in clients:
+                for m in MODELS_CASCADE:
+                    try:
+                        response = client.models.generate_content(
+                            model=m,
+                            contents=[
+                                types.Part.from_bytes(data=audio_bytes, mime_type=mime_type),
+                                instruction
+                            ],
+                            config=types.GenerateContentConfig(
+                                system_instruction=SYSTEM_PROMPT,
+                                temperature=0.3,
+                            )
                         )
-                    )
-                    if response and response.text:
-                        return response.text.strip()
-                except Exception as ex:
-                    logger.debug(f"Audio attempt {attempt} model {m} notice: {ex}")
+                        if response and response.text:
+                            return response.text.strip()
+                    except Exception as ex:
+                        logger.debug(f"Audio attempt {attempt} model {m} notice: {ex}")
             time.sleep(1.0)
         return None
 
@@ -225,10 +251,10 @@ Structure:
 
 async def analyze_video_with_ai(video_bytes: bytes, mime_type: str = "video/mp4", caption: str = "", lang: str = "uz") -> str:
     """
-    Analyzes video notes, short video clips, or GIFs with retry.
+    Analyzes video notes, short video clips, or GIFs with multi-key failover.
     """
-    client = get_genai_client()
-    if not client:
+    clients = get_genai_clients()
+    if not clients:
         return "⚠️ API kalit sozlanmagan."
 
     instruction = f"""Analyze the provided video clip / animation in detail.
@@ -249,23 +275,24 @@ RULES:
 
     def _call_video():
         for attempt in range(3):
-            for m in MODELS_CASCADE:
-                try:
-                    response = client.models.generate_content(
-                        model=m,
-                        contents=[
-                            types.Part.from_bytes(data=video_bytes, mime_type=mime_type),
-                            instruction
-                        ],
-                        config=types.GenerateContentConfig(
-                            system_instruction=SYSTEM_PROMPT,
-                            temperature=0.4,
+            for client in clients:
+                for m in MODELS_CASCADE:
+                    try:
+                        response = client.models.generate_content(
+                            model=m,
+                            contents=[
+                                types.Part.from_bytes(data=video_bytes, mime_type=mime_type),
+                                instruction
+                            ],
+                            config=types.GenerateContentConfig(
+                                system_instruction=SYSTEM_PROMPT,
+                                temperature=0.4,
+                            )
                         )
-                    )
-                    if response and response.text:
-                        return response.text.strip()
-                except Exception as ex:
-                    logger.debug(f"Video attempt {attempt} model {m} notice: {ex}")
+                        if response and response.text:
+                            return response.text.strip()
+                    except Exception as ex:
+                        logger.debug(f"Video attempt {attempt} model {m} notice: {ex}")
             time.sleep(1.0)
         return None
 
@@ -278,10 +305,10 @@ RULES:
 
 async def analyze_document_with_ai(doc_bytes: bytes, mime_type: str = "application/pdf", caption: str = "", lang: str = "uz") -> str:
     """
-    Analyzes document files (PDF essays, practice tests, TRF certificates, text files) with retry.
+    Analyzes document files (PDF essays, practice tests, TRF certificates, text files) with multi-key failover.
     """
-    client = get_genai_client()
-    if not client:
+    clients = get_genai_clients()
+    if not clients:
         return "⚠️ API kalit sozlanmagan."
 
     instruction = f"""Analyze the provided document in detail.
@@ -301,23 +328,24 @@ RULES:
 
     def _call_doc():
         for attempt in range(3):
-            for m in MODELS_CASCADE:
-                try:
-                    response = client.models.generate_content(
-                        model=m,
-                        contents=[
-                            types.Part.from_bytes(data=doc_bytes, mime_type=mime_type),
-                            instruction
-                        ],
-                        config=types.GenerateContentConfig(
-                            system_instruction=SYSTEM_PROMPT,
-                            temperature=0.3,
+            for client in clients:
+                for m in MODELS_CASCADE:
+                    try:
+                        response = client.models.generate_content(
+                            model=m,
+                            contents=[
+                                types.Part.from_bytes(data=doc_bytes, mime_type=mime_type),
+                                instruction
+                            ],
+                            config=types.GenerateContentConfig(
+                                system_instruction=SYSTEM_PROMPT,
+                                temperature=0.3,
+                            )
                         )
-                    )
-                    if response and response.text:
-                        return response.text.strip()
-                except Exception as ex:
-                    logger.debug(f"Doc attempt {attempt} model {m} notice: {ex}")
+                        if response and response.text:
+                            return response.text.strip()
+                    except Exception as ex:
+                        logger.debug(f"Doc attempt {attempt} model {m} notice: {ex}")
             time.sleep(1.0)
         return None
 
