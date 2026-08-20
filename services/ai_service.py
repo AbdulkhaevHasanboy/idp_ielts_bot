@@ -1,8 +1,8 @@
 """
 Comprehensive Gemini AI Service for IDP IELTS Bot.
+Customer Support & IELTS Helper Assistant for IDP IELTS Uzbekistan (Edu-Action).
 Powered by Google Gemini 3.1 & 3.5 series with automatic multi-key rotation, failover,
-and exponential retry for instant text chat, real-time background search, image analysis,
-IELTS Speaking voice notes, video notes, GIFs, and PDF documents.
+and exponential retry for instant voice messages, chat, images, videos, and documents.
 """
 import logging
 import io
@@ -17,14 +17,16 @@ from services.search_service import search_web_async
 
 logger = logging.getLogger(__name__)
 
-SYSTEM_PROMPT = f"""You are 'IDP IELTS AI', an elite, concise, and highly helpful AI assistant for IDP IELTS in Uzbekistan (Edu-Action).
+SYSTEM_PROMPT = f"""You are 'IDP IELTS AI', the official smart helper & customer support assistant for IDP IELTS in Uzbekistan (Edu-Action).
 
-CRITICAL COMMUNICATION RULES:
-1. NEVER dump unsolicited long boilerplate lists, generic FAQ dumps, or unrelated test center information.
-2. Be direct, natural, concise, and focused strictly on the user's specific request or image/audio/video/document.
-3. Language: Respond in the language of the user (Uzbek by default, Russian, or English).
-4. If a user asks for direct human support, manager contact, or Telegram support, provide: Telegram: {SUPPORT_USERNAME} (@idp555) and Call Centre: {SUPPORT_PHONE}.
-5. If a question requires live factual verification (dates, university acceptance, recent news), silently search in background and integrate the answer without mentioning you searched.
+CRITICAL ROLE & COMMUNICATION RULES:
+1. You are a HELPFUL CUSTOMER SUPPORT ASSISTANT, NOT an examiner, tester, or robotic evaluator.
+2. When answering user voice messages or text, listen to what they are asking and directly solve their request in a natural, polite, and concise manner.
+3. NEVER dump unsolicited long boilerplate lists, generic FAQ dumps, or unrelated test center information.
+4. Language: Respond in the language of the user (Uzbek by default, Russian, or English).
+5. If a user asks for direct human support, manager contact, or Telegram support, provide: Telegram: {SUPPORT_USERNAME} (@idp555) and Call Centre: {SUPPORT_PHONE}.
+6. If a question requires live factual verification (dates, university acceptance, recent news), silently search in background and integrate the answer without mentioning you searched.
+7. Only perform formal IELTS criteria grading (Task Achievement, Fluency, etc.) if the user explicitly asks to check/grade their essay or mock speaking. Otherwise, always act as a helpful support assistant!
 """
 
 MODELS_CASCADE = [
@@ -37,13 +39,11 @@ MODELS_CASCADE = [
 def get_genai_clients():
     """
     Returns a list of genai.Client instances configured for all available API keys.
-    Supports GEMINI_API_KEYS (comma-separated), GEMINI_API_KEY, GEMINI_API_KEY_2, etc.
     """
     from dotenv import load_dotenv
     load_dotenv()
     
     keys = []
-    # 1. Comma separated keys
     raw_keys = os.getenv("GEMINI_API_KEYS", "")
     if raw_keys:
         for k in raw_keys.split(","):
@@ -51,7 +51,6 @@ def get_genai_clients():
             if k and k not in keys:
                 keys.append(k)
     
-    # 2. Individual key variables
     for env_var in ["GEMINI_API_KEY", "GEMINI_API_KEY_2", "GEMINI_API_KEY_3"]:
         val = os.getenv(env_var, "").strip()
         if val and val not in keys:
@@ -130,9 +129,60 @@ Provide a concise, helpful, and natural response directly answering the user in 
     else:
         return f"Hello! How can I assist you? Telegram Support: {SUPPORT_USERNAME}"
 
+async def analyze_audio_with_ai(audio_bytes: bytes, mime_type: str = "audio/ogg", lang: str = "uz") -> str:
+    """
+    Understands and answers spoken voice inquiries from users as an IDP IELTS Helper.
+    """
+    clients = get_genai_clients()
+    if not clients:
+        return "⚠️ API kalit sozlanmagan."
+
+    instruction = f"""You are 'IDP IELTS AI', the helpful support assistant for IDP IELTS in Uzbekistan.
+Listen to this user's voice message.
+Respond in {lang}.
+
+RULES:
+1. Understand what question or assistance the user is asking.
+2. Directly answer their question in a friendly, concise, and professional manner in {lang}.
+3. If they are asking for a test center location (e.g. Andijan, Tashkent, Samarkand, Fergana, Namangan, Bukhara, etc.), clearly provide the center details and address.
+4. If they ask about test dates, prices (IELTS 2,665,000 UZS), One Skill Retake, registration or support, answer clearly.
+5. If they specifically asked to evaluate their English speaking practice, provide constructive advice. Otherwise, JUST ANSWER THEIR QUESTION directly!
+6. Support contact: {SUPPORT_USERNAME} (@idp555), Phone: {SUPPORT_PHONE}.
+"""
+
+    def _call_audio():
+        for attempt in range(3):
+            for client in clients:
+                for m in MODELS_CASCADE:
+                    try:
+                        response = client.models.generate_content(
+                            model=m,
+                            contents=[
+                                types.Part.from_bytes(data=audio_bytes, mime_type=mime_type),
+                                instruction
+                            ],
+                            config=types.GenerateContentConfig(
+                                system_instruction=SYSTEM_PROMPT,
+                                temperature=0.4,
+                            )
+                        )
+                        if response and response.text:
+                            return response.text.strip()
+                    except Exception as ex:
+                        logger.debug(f"Audio attempt {attempt} model {m} notice: {ex}")
+            time.sleep(1.0)
+        return None
+
+    loop = asyncio.get_running_loop()
+    res = await loop.run_in_executor(None, _call_audio)
+    if res:
+        return res
+
+    return "⚠️ Ovozli xabarni tushunishda xatolik yuz berdi. Iltimos, qaytadan yuboring." if lang=="uz" else "⚠️ Error processing voice message."
+
 async def analyze_image_with_ai(image_bytes: bytes, caption: str = "", lang: str = "uz") -> str:
     """
-    Multimodal analysis of images using Gemini with multi-key failover.
+    Multimodal analysis of images using Gemini as a helper assistant.
     """
     clients = get_genai_clients()
     if not clients:
@@ -148,8 +198,8 @@ IMPORTANT RULES:
 A. If it is UNRELATED to IELTS (e.g. a barcode, object, random photo, invoice, meme):
    - State exactly what it depicts (e.g. "Ushbu rasmda mahsulot shtrix-kodi (barcode) tasvirlangan.").
    - Explain that it is not an IELTS test material.
-   - Explain what they can do with the bot instead: if they want to check their IELTS Writing essay, speaking task, reading/listening question, or TRF certificate, they can send that photo and get a complete band score evaluation.
-   - CRITICAL: DO NOT dump generic bullet points or test center lists! Keep it short (2-4 sentences).
+   - Explain what they can do with the bot instead: if they want to check their IELTS Writing essay, speaking task, reading/listening question, or TRF certificate, they can send that photo and get help.
+   - CRITICAL: DO NOT dump generic bullet points or test center lists! Keep it short (2-3 sentences).
 
 B. If it is an IELTS Writing Essay (handwritten or typed):
    - Evaluate against the 4 official criteria: Task Achievement (0-9), Coherence & Cohesion (0-9), Lexical Resource (0-9), Grammatical Range & Accuracy (0-9).
@@ -196,62 +246,9 @@ User caption: {caption}
 
     return "⚠️ Rasmni tahlil qilishda xatolik yuz berdi. Iltimos, qayta yuboring." if lang=="uz" else "⚠️ Error analyzing image."
 
-async def analyze_audio_with_ai(audio_bytes: bytes, mime_type: str = "audio/ogg", lang: str = "uz") -> str:
-    """
-    Analyzes speaking practice audio recordings with multi-key failover.
-    """
-    clients = get_genai_clients()
-    if not clients:
-        return "⚠️ API kalit sozlanmagan."
-
-    instruction = f"""You are a certified IELTS Speaking Examiner.
-Listen to this candidate's speaking audio recording.
-Respond in {lang}.
-
-Structure:
-1. 📝 *Xulosa / Matn:* Candidate nima haqida gapirdi.
-2. 🎯 *IELTS Mezonlari Baholashi:*
-   - *Fluency & Coherence:* (Ravonlik va fikrlar bog'liqligi)
-   - *Lexical Resource:* (So'z boyligi va iboralar)
-   - *Grammar:* (Grammatik xilma-xillik va aniqlik)
-   - *Pronunciation:* (Talaffuz va urg'u)
-3. ⭐ *Taxminiy Speaking Band:* (masalan: Band 6.5)
-4. 💡 *Band 8+ ga chiqish uchun 2-3 ta aniq maslahat*.
-"""
-
-    def _call_audio():
-        for attempt in range(3):
-            for client in clients:
-                for m in MODELS_CASCADE:
-                    try:
-                        response = client.models.generate_content(
-                            model=m,
-                            contents=[
-                                types.Part.from_bytes(data=audio_bytes, mime_type=mime_type),
-                                instruction
-                            ],
-                            config=types.GenerateContentConfig(
-                                system_instruction=SYSTEM_PROMPT,
-                                temperature=0.3,
-                            )
-                        )
-                        if response and response.text:
-                            return response.text.strip()
-                    except Exception as ex:
-                        logger.debug(f"Audio attempt {attempt} model {m} notice: {ex}")
-            time.sleep(1.0)
-        return None
-
-    loop = asyncio.get_running_loop()
-    res = await loop.run_in_executor(None, _call_audio)
-    if res:
-        return res
-
-    return "⚠️ Ovozli xabarni tahlil qilishda xatolik yuz berdi. Iltimos, qaytadan yozib yuboring." if lang=="uz" else "⚠️ Error analyzing audio."
-
 async def analyze_video_with_ai(video_bytes: bytes, mime_type: str = "video/mp4", caption: str = "", lang: str = "uz") -> str:
     """
-    Analyzes video notes, short video clips, or GIFs with multi-key failover.
+    Analyzes video notes, short video clips, or GIFs.
     """
     clients = get_genai_clients()
     if not clients:
@@ -263,14 +260,13 @@ Caption/context: {caption}
 
 RULES:
 1. State clearly what is happening in the video.
-2. If it is an IELTS Speaking presentation / mock test:
-   - Assess Fluency, Body language, Eye contact, Pronunciation, and Lexical usage.
-   - Provide estimated Band score and constructive improvements.
+2. If it is an IELTS inquiry or presentation:
+   - Provide helpful, friendly guidance and constructive tips.
 3. If it is an IELTS tutorial, question screen recording, or graph animation:
    - Explain the solution and key takeaways.
 4. If it is an unrelated clip, meme, or GIF:
    - Briefly describe what it shows in 1-2 friendly sentences.
-   - Politely mention they can send IELTS Speaking video notes, essay photos, or voice recordings for full AI evaluation!
+   - Politely remind user of IDP IELTS features and support!
 """
 
     def _call_video():
@@ -305,7 +301,7 @@ RULES:
 
 async def analyze_document_with_ai(doc_bytes: bytes, mime_type: str = "application/pdf", caption: str = "", lang: str = "uz") -> str:
     """
-    Analyzes document files (PDF essays, practice tests, TRF certificates, text files) with multi-key failover.
+    Analyzes document files (PDF essays, practice tests, TRF certificates, text files).
     """
     clients = get_genai_clients()
     if not clients:

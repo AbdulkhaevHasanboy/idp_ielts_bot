@@ -1,21 +1,106 @@
 """
-Media handlers for processing photos, handwritten essays, test tasks, TRFs,
-voice recordings, video notes (krujochek), GIFs, and PDF documents using AI.
+Media handlers for processing voice messages, photos, videos, video notes, GIFs, and documents.
+Acts as a smart IDP IELTS Helper Assistant with instant Telegram Map/Venue support.
 """
 import io
 import logging
 from telegram import Update
 from telegram.ext import ContextTypes
-from services.user_state import get_user_language
+from services.user_state import get_user_language, set_user_state
 from services.ai_service import (
     analyze_image_with_ai,
     analyze_audio_with_ai,
     analyze_video_with_ai,
     analyze_document_with_ai
 )
+from services.location_service import detect_city_in_text
+from data.test_centers import TEST_CENTERS
+from keyboards import get_center_detail_keyboard
 from locales import t
 
 logger = logging.getLogger(__name__)
+
+async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Handles user voice messages, answers spoken questions directly,
+    and automatically sends Telegram Map Venues if a city/center was asked.
+    """
+    user = update.effective_user
+    lang = get_user_language(user.id)
+
+    voice_file = await update.message.voice.get_file()
+    voice_bytes_io = io.BytesIO()
+    await voice_file.download_to_memory(voice_bytes_io)
+    audio_bytes = voice_bytes_io.getvalue()
+
+    status_msg = await update.message.reply_text(
+        "🎧 *Ovozli xabaringiz eshitilmoqda...*" if lang=="uz" else "🎧 *Слушаю ваше голосовое сообщение...*",
+        reply_to_message_id=update.message.message_id,
+        parse_mode="Markdown"
+    )
+
+    audio_result = await analyze_audio_with_ai(audio_bytes, mime_type="audio/ogg", lang=lang)
+
+    try:
+        await status_msg.edit_text(audio_result, parse_mode="Markdown")
+    except Exception:
+        await status_msg.edit_text(audio_result)
+
+    # Check if a city/center was discussed/requested in the voice message
+    detected_city_id = detect_city_in_text(audio_result)
+    if detected_city_id and detected_city_id in TEST_CENTERS:
+        center = TEST_CENTERS[detected_city_id]
+        address = center.get(f"address_{lang}", center["address_uz"])
+        set_user_state(user.id, state="NONE", last_center_id=detected_city_id)
+        
+        # Send native Telegram Venue Map Pin
+        await context.bot.send_venue(
+            chat_id=update.message.chat_id,
+            latitude=center["latitude"],
+            longitude=center["longitude"],
+            title=center["title"],
+            address=address,
+            reply_to_message_id=update.message.message_id
+        )
+
+async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles audio files (MP3, WAV, M4A)."""
+    user = update.effective_user
+    lang = get_user_language(user.id)
+
+    audio_file = await update.message.audio.get_file()
+    audio_bytes_io = io.BytesIO()
+    await audio_file.download_to_memory(audio_bytes_io)
+    audio_bytes = audio_bytes_io.getvalue()
+
+    status_msg = await update.message.reply_text(
+        "🎧 *Audio xabaringiz eshitilmoqda...*" if lang=="uz" else "🎧 *Слушаю ваше аудио...*",
+        reply_to_message_id=update.message.message_id,
+        parse_mode="Markdown"
+    )
+
+    mime_type = update.message.audio.mime_type or "audio/mp3"
+    audio_result = await analyze_audio_with_ai(audio_bytes, mime_type=mime_type, lang=lang)
+
+    try:
+        await status_msg.edit_text(audio_result, parse_mode="Markdown")
+    except Exception:
+        await status_msg.edit_text(audio_result)
+
+    detected_city_id = detect_city_in_text(audio_result)
+    if detected_city_id and detected_city_id in TEST_CENTERS:
+        center = TEST_CENTERS[detected_city_id]
+        address = center.get(f"address_{lang}", center["address_uz"])
+        set_user_state(user.id, state="NONE", last_center_id=detected_city_id)
+        
+        await context.bot.send_venue(
+            chat_id=update.message.chat_id,
+            latitude=center["latitude"],
+            longitude=center["longitude"],
+            title=center["title"],
+            address=address,
+            reply_to_message_id=update.message.message_id
+        )
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles photos of essays, test tasks, charts, TRFs, barcodes, objects."""
@@ -41,53 +126,6 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         await status_msg.edit_text(analysis_result)
 
-async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles IELTS Speaking voice notes."""
-    user = update.effective_user
-    lang = get_user_language(user.id)
-
-    voice_file = await update.message.voice.get_file()
-    voice_bytes_io = io.BytesIO()
-    await voice_file.download_to_memory(voice_bytes_io)
-    audio_bytes = voice_bytes_io.getvalue()
-
-    status_msg = await update.message.reply_text(
-        t("ai_analyzing_audio", lang),
-        reply_to_message_id=update.message.message_id,
-        parse_mode="Markdown"
-    )
-
-    audio_result = await analyze_audio_with_ai(audio_bytes, mime_type="audio/ogg", lang=lang)
-
-    try:
-        await status_msg.edit_text(audio_result, parse_mode="Markdown")
-    except Exception:
-        await status_msg.edit_text(audio_result)
-
-async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles audio files (MP3, WAV, M4A)."""
-    user = update.effective_user
-    lang = get_user_language(user.id)
-
-    audio_file = await update.message.audio.get_file()
-    audio_bytes_io = io.BytesIO()
-    await audio_file.download_to_memory(audio_bytes_io)
-    audio_bytes = audio_bytes_io.getvalue()
-
-    status_msg = await update.message.reply_text(
-        t("ai_analyzing_audio", lang),
-        reply_to_message_id=update.message.message_id,
-        parse_mode="Markdown"
-    )
-
-    mime_type = update.message.audio.mime_type or "audio/mp3"
-    audio_result = await analyze_audio_with_ai(audio_bytes, mime_type=mime_type, lang=lang)
-
-    try:
-        await status_msg.edit_text(audio_result, parse_mode="Markdown")
-    except Exception:
-        await status_msg.edit_text(audio_result)
-
 async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles video files (MP4, MKV, AVI) up to 20MB."""
     user = update.effective_user
@@ -103,7 +141,7 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     status_msg = await update.message.reply_text(
-        "🎬 *AI videoni tahlil qilmoqda...*" if lang=="uz" else "🎬 *AI is analyzing the video...*",
+        "🎬 *AI videoni ko'rib chiqmoqda...*" if lang=="uz" else "🎬 *AI is reviewing your video...*",
         reply_to_message_id=update.message.message_id,
         parse_mode="Markdown"
     )
@@ -122,13 +160,13 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await status_msg.edit_text(result)
 
 async def handle_video_note(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles round video notes (krujochek) for Speaking presentations."""
+    """Handles round video notes (krujochek)."""
     user = update.effective_user
     lang = get_user_language(user.id)
     vn = update.message.video_note
 
     status_msg = await update.message.reply_text(
-        "🎥 *AI video xabarni (Speaking) tahlil qilmoqda...*" if lang=="uz" else "🎥 *AI is analyzing your video note...*",
+        "🎥 *AI video xabaringizni ko'rib chiqmoqda...*" if lang=="uz" else "🎥 *AI is reviewing your video note...*",
         reply_to_message_id=update.message.message_id,
         parse_mode="Markdown"
     )
@@ -138,7 +176,7 @@ async def handle_video_note(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await vn_file.download_to_memory(vn_bytes_io)
     vn_bytes = vn_bytes_io.getvalue()
 
-    result = await analyze_video_with_ai(vn_bytes, mime_type="video/mp4", caption="Speaking Video Note", lang=lang)
+    result = await analyze_video_with_ai(vn_bytes, mime_type="video/mp4", caption="Video Note", lang=lang)
 
     try:
         await status_msg.edit_text(result, parse_mode="Markdown")
@@ -152,7 +190,7 @@ async def handle_animation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     anim = update.message.animation
 
     status_msg = await update.message.reply_text(
-        "🎨 *AI animatsiyani (GIF) ko'rib chiqmoqda...*" if lang=="uz" else "🎨 *AI is analyzing the GIF animation...*",
+        "🎨 *AI animatsiyani (GIF) ko'rib chiqmoqda...*" if lang=="uz" else "🎨 *AI is reviewing the GIF animation...*",
         reply_to_message_id=update.message.message_id,
         parse_mode="Markdown"
     )
