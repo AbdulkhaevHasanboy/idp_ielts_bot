@@ -386,6 +386,32 @@ RULES:
    - Briefly summarize what it is in 2 sentences, and remind user of IELTS features.
 """
 
+    if "live" in GEMINI_MODEL:
+        try:
+            async with client.aio.live.connect(
+                model=GEMINI_MODEL,
+                config=types.LiveConnectConfig(
+                    system_instruction=types.Content(parts=[types.Part.from_text(text=SYSTEM_PROMPT)])
+                )
+            ) as session:
+                await session.send_realtime_input(
+                    media_chunks=[types.Blob(data=doc_bytes, mime_type=mime_type)],
+                    text=instruction
+                )
+                full_text = ""
+                async for response in session.receive():
+                    server_content = response.server_content
+                    if server_content and server_content.model_turn:
+                        for part in server_content.model_turn.parts:
+                            if part.text:
+                                full_text += part.text
+                    if server_content and server_content.turn_complete:
+                        break
+                if full_text.strip():
+                    return full_text.strip()
+        except Exception as e:
+            logger.warning(f"Live API doc error ({GEMINI_MODEL}): {e}. Trying generate_content fallback...")
+
     def _call_gemini_doc_fallback():
         models_to_try = ["gemini-2.5-flash", "gemini-3.5-flash"]
         for m in models_to_try:
