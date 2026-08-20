@@ -32,6 +32,9 @@ from handlers.media import (
     handle_photo,
     handle_voice,
     handle_audio,
+    handle_video,
+    handle_video_note,
+    handle_animation,
     handle_document
 )
 
@@ -88,10 +91,13 @@ def main():
     # 4. Register Callback Query Handlers (Interactive buttons, quizzes, flashcards, maps)
     application.add_handler(CallbackQueryHandler(handle_callback_query))
 
-    # 5. Register Multimodal Media Handlers (Photos/Essays, Voice, Documents)
+    # 5. Register Multimodal Media Handlers (Photos, Voice, Audio, Video, Video Notes, GIFs, Documents)
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     application.add_handler(MessageHandler(filters.VOICE, handle_voice))
     application.add_handler(MessageHandler(filters.AUDIO, handle_audio))
+    application.add_handler(MessageHandler(filters.VIDEO, handle_video))
+    application.add_handler(MessageHandler(filters.VIDEO_NOTE, handle_video_note))
+    application.add_handler(MessageHandler(filters.ANIMATION, handle_animation))
     application.add_handler(MessageHandler(filters.Document.ALL, handle_document))
 
     # 6. Register Message Text Handler (AI Chat, Conversations, Calculations)

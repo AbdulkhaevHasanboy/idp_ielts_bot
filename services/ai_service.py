@@ -1,7 +1,8 @@
 """
 Comprehensive Gemini AI Service for IDP IELTS Bot.
 Supports Gemini 3.1 Flash Live Preview & Gemini multimodal generation for chat,
-live background search, images, handwritten essays, and audio voice examination.
+live background search, images, handwritten essays, audio voice examination,
+video notes, GIFs, and PDF documents.
 """
 import logging
 import io
@@ -18,7 +19,7 @@ SYSTEM_PROMPT = f"""You are 'IDP IELTS AI', an elite, concise, and highly helpfu
 
 CRITICAL COMMUNICATION RULES:
 1. NEVER dump unsolicited long boilerplate lists, generic FAQ dumps, or unrelated test center information.
-2. Be direct, natural, concise, and focused strictly on the user's specific request or image.
+2. Be direct, natural, concise, and focused strictly on the user's specific request or image/audio/video/document.
 3. Language: Respond in the language of the user (Uzbek by default, Russian, or English).
 4. If a user asks for direct human support, manager contact, or Telegram support, provide: Telegram: {SUPPORT_USERNAME} (@idp555) and Call Centre: {SUPPORT_PHONE}.
 5. If a question requires live factual verification (dates, university acceptance, recent news), silently search in background and integrate the answer without mentioning you searched.
@@ -42,7 +43,7 @@ async def generate_ai_chat_response(user_text: str, user_name: str = "Candidate"
     """
     client = get_genai_client()
     if not client:
-        return "Assalomu alaykum! IDP IELTS bo'yicha qanday savolingiz bor? Qo'llab-quvvatlash: @idp555" if lang=="uz" else "Здравствуйте! Чем могу помочь по IDP IELTS? Поддержка: @idp555"
+        return f"Assalomu alaykum! IDP IELTS bo'yicha qanday savolingiz bor? Qo'llab-quvvatlash: {SUPPORT_USERNAME}" if lang=="uz" else f"Здравствуйте! Чем могу помочь по IDP IELTS? Поддержка: {SUPPORT_USERNAME}"
 
     lower = user_text.lower()
     needs_search = any(k in lower for k in [
@@ -68,7 +69,6 @@ User message: {user_text}
 
 Provide a concise, helpful, and natural response directly answering the user in {lang}. Do not dump unprompted generic lists. Support member username: {SUPPORT_USERNAME}."""
 
-    # Try Gemini Live API first if model is live preview, otherwise fallback to generate_content
     if "live" in GEMINI_MODEL:
         try:
             async with client.aio.live.connect(
@@ -92,7 +92,6 @@ Provide a concise, helpful, and natural response directly answering the user in 
         except Exception as e:
             logger.warning(f"Live API chat error ({GEMINI_MODEL}): {e}. Trying generate_content fallback...")
 
-    # Fallback to generate_content with standard models
     def _call_gemini_fallback():
         models_to_try = ["gemini-2.5-flash", "gemini-3.5-flash"]
         for m in models_to_try:
@@ -158,7 +157,6 @@ D. If it is an IELTS TRF / Certificate / Score Report:
 User caption: {caption}
 """
 
-    # Try Live API first if model is live preview
     if "live" in GEMINI_MODEL:
         try:
             async with client.aio.live.connect(
@@ -185,7 +183,6 @@ User caption: {caption}
         except Exception as e:
             logger.warning(f"Live API image error ({GEMINI_MODEL}): {e}. Trying generate_content fallback...")
 
-    # Fallback to standard multimodal generate_content
     def _call_gemini_vision_fallback():
         models_to_try = ["gemini-2.5-flash", "gemini-3.5-flash"]
         for m in models_to_try:
@@ -288,3 +285,130 @@ Structure:
         return res
 
     return "⚠️ Ovozli xabarni tahlil qilishda xatolik yuz berdi. Iltimos, qaytadan yozib yuboring." if lang=="uz" else "⚠️ Error analyzing audio."
+
+async def analyze_video_with_ai(video_bytes: bytes, mime_type: str = "video/mp4", caption: str = "", lang: str = "uz") -> str:
+    """
+    Analyzes video notes, short video clips, or GIFs using Gemini 3.1 Flash Live / Gemini Vision.
+    """
+    client = get_genai_client()
+    if not client:
+        return "⚠️ API kalit sozlanmagan."
+
+    instruction = f"""Analyze the provided video clip / animation in detail.
+Language for response: {lang}
+Caption/context: {caption}
+
+RULES:
+1. State clearly what is happening in the video.
+2. If it is an IELTS Speaking presentation / mock test:
+   - Assess Fluency, Body language, Eye contact, Pronunciation, and Lexical usage.
+   - Provide estimated Band score and constructive improvements.
+3. If it is an IELTS tutorial, question screen recording, or graph animation:
+   - Explain the solution and key takeaways.
+4. If it is an unrelated clip, meme, or GIF:
+   - Briefly describe what it shows in 1-2 friendly sentences.
+   - Politely mention they can send IELTS Speaking video notes, essay photos, or voice recordings for full AI evaluation!
+"""
+
+    if "live" in GEMINI_MODEL:
+        try:
+            async with client.aio.live.connect(
+                model=GEMINI_MODEL,
+                config=types.LiveConnectConfig(
+                    system_instruction=types.Content(parts=[types.Part.from_text(text=SYSTEM_PROMPT)])
+                )
+            ) as session:
+                await session.send_realtime_input(
+                    media_chunks=[types.Blob(data=video_bytes, mime_type=mime_type)],
+                    text=instruction
+                )
+                full_text = ""
+                async for response in session.receive():
+                    server_content = response.server_content
+                    if server_content and server_content.model_turn:
+                        for part in server_content.model_turn.parts:
+                            if part.text:
+                                full_text += part.text
+                    if server_content and server_content.turn_complete:
+                        break
+                if full_text.strip():
+                    return full_text.strip()
+        except Exception as e:
+            logger.warning(f"Live API video error ({GEMINI_MODEL}): {e}. Trying generate_content fallback...")
+
+    def _call_gemini_video_fallback():
+        models_to_try = ["gemini-2.5-flash", "gemini-3.5-flash"]
+        for m in models_to_try:
+            try:
+                response = client.models.generate_content(
+                    model=m,
+                    contents=[
+                        types.Part.from_bytes(data=video_bytes, mime_type=mime_type),
+                        instruction
+                    ],
+                    config=types.GenerateContentConfig(
+                        system_instruction=SYSTEM_PROMPT,
+                        temperature=0.4,
+                    )
+                )
+                return response.text.strip()
+            except Exception as ex:
+                logger.error(f"Video model {m} error: {ex}")
+        return None
+
+    loop = asyncio.get_running_loop()
+    res = await loop.run_in_executor(None, _call_gemini_video_fallback)
+    if res:
+        return res
+
+    return "⚠️ Videoni tahlil qilishda xatolik yuz berdi." if lang=="uz" else "⚠️ Error analyzing video."
+
+async def analyze_document_with_ai(doc_bytes: bytes, mime_type: str = "application/pdf", caption: str = "", lang: str = "uz") -> str:
+    """
+    Analyzes document files (PDF essays, practice tests, TRF certificates, text files).
+    """
+    client = get_genai_client()
+    if not client:
+        return "⚠️ API kalit sozlanmagan."
+
+    instruction = f"""Analyze the provided document in detail.
+Language for response: {lang}
+Caption/notes: {caption}
+
+RULES:
+1. Identify the document type (e.g. IELTS Writing Essay PDF, Practice Test paper, Score Report TRF, Notes).
+2. If it is an Essay:
+   - Provide official 4-criteria evaluation (Task Achievement, Coherence & Cohesion, Lexical Resource, Grammatical Range & Accuracy).
+   - Overall Band estimation, highlighted mistakes, and Band 9 model suggestions.
+3. If it is a Test/Task:
+   - Provide clear, step-by-step explanations and answers.
+4. If it is not IELTS-related:
+   - Briefly summarize what it is in 2 sentences, and remind user of IELTS features.
+"""
+
+    def _call_gemini_doc_fallback():
+        models_to_try = ["gemini-2.5-flash", "gemini-3.5-flash"]
+        for m in models_to_try:
+            try:
+                response = client.models.generate_content(
+                    model=m,
+                    contents=[
+                        types.Part.from_bytes(data=doc_bytes, mime_type=mime_type),
+                        instruction
+                    ],
+                    config=types.GenerateContentConfig(
+                        system_instruction=SYSTEM_PROMPT,
+                        temperature=0.3,
+                    )
+                )
+                return response.text.strip()
+            except Exception as ex:
+                logger.error(f"Doc model {m} error: {ex}")
+        return None
+
+    loop = asyncio.get_running_loop()
+    res = await loop.run_in_executor(None, _call_gemini_doc_fallback)
+    if res:
+        return res
+
+    return "⚠️ Hujjatni tahlil qilishda xatolik yuz berdi." if lang=="uz" else "⚠️ Error analyzing document."
