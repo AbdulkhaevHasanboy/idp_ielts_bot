@@ -1,11 +1,12 @@
 """
 Comprehensive Gemini AI Service for IDP IELTS Bot.
-Supports Gemini 3.1 Flash Live Preview & Gemini multimodal generation for chat,
-live background search, images, handwritten essays, audio voice examination,
+Powered by Google Gemini 3.1 & 3.5 series with automatic retry, backoff, and multi-model failover
+for instant text chat, real-time background search, image analysis, IELTS Speaking voice notes,
 video notes, GIFs, and PDF documents.
 """
 import logging
 import io
+import time
 import asyncio
 from google import genai
 from google.genai import types
@@ -25,21 +26,26 @@ CRITICAL COMMUNICATION RULES:
 5. If a question requires live factual verification (dates, university acceptance, recent news), silently search in background and integrate the answer without mentioning you searched.
 """
 
+# Cascade of high-performance models
+MODELS_CASCADE = [
+    "gemini-3.1-flash-lite",
+    "gemini-3.5-flash",
+    "gemini-flash-latest",
+    "gemini-2.5-flash"
+]
+
 def get_genai_client():
-    api_key = GEMINI_API_KEY
-    if not api_key:
-        import os
-        from dotenv import load_dotenv
-        load_dotenv()
-        api_key = os.getenv("GEMINI_API_KEY")
+    import os
+    from dotenv import load_dotenv
+    load_dotenv()
+    api_key = os.getenv("GEMINI_API_KEY") or GEMINI_API_KEY
     if not api_key:
         return None
     return genai.Client(api_key=api_key)
 
 async def generate_ai_chat_response(user_text: str, user_name: str = "Candidate", lang: str = "uz") -> str:
     """
-    Generates natural, concise AI response using Gemini 3.1 Flash Live / Gemini model.
-    Searches in background only if real-time facts are needed.
+    Generates natural, concise AI response with automatic failover and retry.
     """
     client = get_genai_client()
     if not client:
@@ -69,48 +75,27 @@ User message: {user_text}
 
 Provide a concise, helpful, and natural response directly answering the user in {lang}. Do not dump unprompted generic lists. Support member username: {SUPPORT_USERNAME}."""
 
-    if "live" in GEMINI_MODEL:
-        try:
-            async with client.aio.live.connect(
-                model=GEMINI_MODEL,
-                config=types.LiveConnectConfig(
-                    system_instruction=types.Content(parts=[types.Part.from_text(text=SYSTEM_PROMPT)])
-                )
-            ) as session:
-                await session.send_realtime_input(text=prompt)
-                full_text = ""
-                async for response in session.receive():
-                    server_content = response.server_content
-                    if server_content and server_content.model_turn:
-                        for part in server_content.model_turn.parts:
-                            if part.text:
-                                full_text += part.text
-                    if server_content and server_content.turn_complete:
-                        break
-                if full_text.strip():
-                    return full_text.strip()
-        except Exception as e:
-            logger.warning(f"Live API chat error ({GEMINI_MODEL}): {e}. Trying generate_content fallback...")
-
-    def _call_gemini_fallback():
-        models_to_try = ["gemini-2.5-flash", "gemini-3.5-flash"]
-        for m in models_to_try:
-            try:
-                response = client.models.generate_content(
-                    model=m,
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        system_instruction=SYSTEM_PROMPT,
-                        temperature=0.7,
+    def _call():
+        for attempt in range(3):
+            for m in MODELS_CASCADE:
+                try:
+                    response = client.models.generate_content(
+                        model=m,
+                        contents=prompt,
+                        config=types.GenerateContentConfig(
+                            system_instruction=SYSTEM_PROMPT,
+                            temperature=0.7,
+                        )
                     )
-                )
-                return response.text.strip()
-            except Exception as ex:
-                logger.error(f"Model {m} error: {ex}")
+                    if response and response.text:
+                        return response.text.strip()
+                except Exception as ex:
+                    logger.debug(f"Chat attempt {attempt} model {m} notice: {ex}")
+            time.sleep(1.0)
         return None
 
     loop = asyncio.get_running_loop()
-    res = await loop.run_in_executor(None, _call_gemini_fallback)
+    res = await loop.run_in_executor(None, _call)
     if res:
         return res
 
@@ -123,7 +108,7 @@ Provide a concise, helpful, and natural response directly answering the user in 
 
 async def analyze_image_with_ai(image_bytes: bytes, caption: str = "", lang: str = "uz") -> str:
     """
-    Multimodal analysis of images using Gemini 3.1 Flash Live Preview / Gemini Vision.
+    Multimodal analysis of images using Gemini with automatic retry.
     """
     client = get_genai_client()
     if not client:
@@ -157,54 +142,30 @@ D. If it is an IELTS TRF / Certificate / Score Report:
 User caption: {caption}
 """
 
-    if "live" in GEMINI_MODEL:
-        try:
-            async with client.aio.live.connect(
-                model=GEMINI_MODEL,
-                config=types.LiveConnectConfig(
-                    system_instruction=types.Content(parts=[types.Part.from_text(text=SYSTEM_PROMPT)])
-                )
-            ) as session:
-                await session.send_realtime_input(
-                    media_chunks=[types.Blob(data=image_bytes, mime_type="image/jpeg")],
-                    text=instruction
-                )
-                full_text = ""
-                async for response in session.receive():
-                    server_content = response.server_content
-                    if server_content and server_content.model_turn:
-                        for part in server_content.model_turn.parts:
-                            if part.text:
-                                full_text += part.text
-                    if server_content and server_content.turn_complete:
-                        break
-                if full_text.strip():
-                    return full_text.strip()
-        except Exception as e:
-            logger.warning(f"Live API image error ({GEMINI_MODEL}): {e}. Trying generate_content fallback...")
-
-    def _call_gemini_vision_fallback():
-        models_to_try = ["gemini-2.5-flash", "gemini-3.5-flash"]
-        for m in models_to_try:
-            try:
-                response = client.models.generate_content(
-                    model=m,
-                    contents=[
-                        types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg"),
-                        instruction
-                    ],
-                    config=types.GenerateContentConfig(
-                        system_instruction=SYSTEM_PROMPT,
-                        temperature=0.3,
+    def _call_vision():
+        for attempt in range(3):
+            for m in MODELS_CASCADE:
+                try:
+                    response = client.models.generate_content(
+                        model=m,
+                        contents=[
+                            types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg"),
+                            instruction
+                        ],
+                        config=types.GenerateContentConfig(
+                            system_instruction=SYSTEM_PROMPT,
+                            temperature=0.3,
+                        )
                     )
-                )
-                return response.text.strip()
-            except Exception as ex:
-                logger.error(f"Vision model {m} error: {ex}")
+                    if response and response.text:
+                        return response.text.strip()
+                except Exception as ex:
+                    logger.debug(f"Vision attempt {attempt} model {m} notice: {ex}")
+            time.sleep(1.0)
         return None
 
     loop = asyncio.get_running_loop()
-    res = await loop.run_in_executor(None, _call_gemini_vision_fallback)
+    res = await loop.run_in_executor(None, _call_vision)
     if res:
         return res
 
@@ -212,7 +173,7 @@ User caption: {caption}
 
 async def analyze_audio_with_ai(audio_bytes: bytes, mime_type: str = "audio/ogg", lang: str = "uz") -> str:
     """
-    Analyzes speaking practice audio recordings using Gemini Live / Gemini Audio.
+    Analyzes speaking practice audio recordings with full criteria evaluation and retry.
     """
     client = get_genai_client()
     if not client:
@@ -233,54 +194,30 @@ Structure:
 4. 💡 *Band 8+ ga chiqish uchun 2-3 ta aniq maslahat*.
 """
 
-    if "live" in GEMINI_MODEL:
-        try:
-            async with client.aio.live.connect(
-                model=GEMINI_MODEL,
-                config=types.LiveConnectConfig(
-                    system_instruction=types.Content(parts=[types.Part.from_text(text=SYSTEM_PROMPT)])
-                )
-            ) as session:
-                await session.send_realtime_input(
-                    media_chunks=[types.Blob(data=audio_bytes, mime_type=mime_type)],
-                    text=instruction
-                )
-                full_text = ""
-                async for response in session.receive():
-                    server_content = response.server_content
-                    if server_content and server_content.model_turn:
-                        for part in server_content.model_turn.parts:
-                            if part.text:
-                                full_text += part.text
-                    if server_content and server_content.turn_complete:
-                        break
-                if full_text.strip():
-                    return full_text.strip()
-        except Exception as e:
-            logger.warning(f"Live API audio error ({GEMINI_MODEL}): {e}. Trying generate_content fallback...")
-
-    def _call_gemini_audio_fallback():
-        models_to_try = ["gemini-2.5-flash", "gemini-3.5-flash"]
-        for m in models_to_try:
-            try:
-                response = client.models.generate_content(
-                    model=m,
-                    contents=[
-                        types.Part.from_bytes(data=audio_bytes, mime_type=mime_type),
-                        instruction
-                    ],
-                    config=types.GenerateContentConfig(
-                        system_instruction=SYSTEM_PROMPT,
-                        temperature=0.3,
+    def _call_audio():
+        for attempt in range(3):
+            for m in MODELS_CASCADE:
+                try:
+                    response = client.models.generate_content(
+                        model=m,
+                        contents=[
+                            types.Part.from_bytes(data=audio_bytes, mime_type=mime_type),
+                            instruction
+                        ],
+                        config=types.GenerateContentConfig(
+                            system_instruction=SYSTEM_PROMPT,
+                            temperature=0.3,
+                        )
                     )
-                )
-                return response.text.strip()
-            except Exception as ex:
-                logger.error(f"Audio model {m} error: {ex}")
+                    if response and response.text:
+                        return response.text.strip()
+                except Exception as ex:
+                    logger.debug(f"Audio attempt {attempt} model {m} notice: {ex}")
+            time.sleep(1.0)
         return None
 
     loop = asyncio.get_running_loop()
-    res = await loop.run_in_executor(None, _call_gemini_audio_fallback)
+    res = await loop.run_in_executor(None, _call_audio)
     if res:
         return res
 
@@ -288,7 +225,7 @@ Structure:
 
 async def analyze_video_with_ai(video_bytes: bytes, mime_type: str = "video/mp4", caption: str = "", lang: str = "uz") -> str:
     """
-    Analyzes video notes, short video clips, or GIFs using Gemini 3.1 Flash Live / Gemini Vision.
+    Analyzes video notes, short video clips, or GIFs with retry.
     """
     client = get_genai_client()
     if not client:
@@ -310,54 +247,30 @@ RULES:
    - Politely mention they can send IELTS Speaking video notes, essay photos, or voice recordings for full AI evaluation!
 """
 
-    if "live" in GEMINI_MODEL:
-        try:
-            async with client.aio.live.connect(
-                model=GEMINI_MODEL,
-                config=types.LiveConnectConfig(
-                    system_instruction=types.Content(parts=[types.Part.from_text(text=SYSTEM_PROMPT)])
-                )
-            ) as session:
-                await session.send_realtime_input(
-                    media_chunks=[types.Blob(data=video_bytes, mime_type=mime_type)],
-                    text=instruction
-                )
-                full_text = ""
-                async for response in session.receive():
-                    server_content = response.server_content
-                    if server_content and server_content.model_turn:
-                        for part in server_content.model_turn.parts:
-                            if part.text:
-                                full_text += part.text
-                    if server_content and server_content.turn_complete:
-                        break
-                if full_text.strip():
-                    return full_text.strip()
-        except Exception as e:
-            logger.warning(f"Live API video error ({GEMINI_MODEL}): {e}. Trying generate_content fallback...")
-
-    def _call_gemini_video_fallback():
-        models_to_try = ["gemini-2.5-flash", "gemini-3.5-flash"]
-        for m in models_to_try:
-            try:
-                response = client.models.generate_content(
-                    model=m,
-                    contents=[
-                        types.Part.from_bytes(data=video_bytes, mime_type=mime_type),
-                        instruction
-                    ],
-                    config=types.GenerateContentConfig(
-                        system_instruction=SYSTEM_PROMPT,
-                        temperature=0.4,
+    def _call_video():
+        for attempt in range(3):
+            for m in MODELS_CASCADE:
+                try:
+                    response = client.models.generate_content(
+                        model=m,
+                        contents=[
+                            types.Part.from_bytes(data=video_bytes, mime_type=mime_type),
+                            instruction
+                        ],
+                        config=types.GenerateContentConfig(
+                            system_instruction=SYSTEM_PROMPT,
+                            temperature=0.4,
+                        )
                     )
-                )
-                return response.text.strip()
-            except Exception as ex:
-                logger.error(f"Video model {m} error: {ex}")
+                    if response and response.text:
+                        return response.text.strip()
+                except Exception as ex:
+                    logger.debug(f"Video attempt {attempt} model {m} notice: {ex}")
+            time.sleep(1.0)
         return None
 
     loop = asyncio.get_running_loop()
-    res = await loop.run_in_executor(None, _call_gemini_video_fallback)
+    res = await loop.run_in_executor(None, _call_video)
     if res:
         return res
 
@@ -365,7 +278,7 @@ RULES:
 
 async def analyze_document_with_ai(doc_bytes: bytes, mime_type: str = "application/pdf", caption: str = "", lang: str = "uz") -> str:
     """
-    Analyzes document files (PDF essays, practice tests, TRF certificates, text files).
+    Analyzes document files (PDF essays, practice tests, TRF certificates, text files) with retry.
     """
     client = get_genai_client()
     if not client:
@@ -386,54 +299,30 @@ RULES:
    - Briefly summarize what it is in 2 sentences, and remind user of IELTS features.
 """
 
-    if "live" in GEMINI_MODEL:
-        try:
-            async with client.aio.live.connect(
-                model=GEMINI_MODEL,
-                config=types.LiveConnectConfig(
-                    system_instruction=types.Content(parts=[types.Part.from_text(text=SYSTEM_PROMPT)])
-                )
-            ) as session:
-                await session.send_realtime_input(
-                    media_chunks=[types.Blob(data=doc_bytes, mime_type=mime_type)],
-                    text=instruction
-                )
-                full_text = ""
-                async for response in session.receive():
-                    server_content = response.server_content
-                    if server_content and server_content.model_turn:
-                        for part in server_content.model_turn.parts:
-                            if part.text:
-                                full_text += part.text
-                    if server_content and server_content.turn_complete:
-                        break
-                if full_text.strip():
-                    return full_text.strip()
-        except Exception as e:
-            logger.warning(f"Live API doc error ({GEMINI_MODEL}): {e}. Trying generate_content fallback...")
-
-    def _call_gemini_doc_fallback():
-        models_to_try = ["gemini-2.5-flash", "gemini-3.5-flash"]
-        for m in models_to_try:
-            try:
-                response = client.models.generate_content(
-                    model=m,
-                    contents=[
-                        types.Part.from_bytes(data=doc_bytes, mime_type=mime_type),
-                        instruction
-                    ],
-                    config=types.GenerateContentConfig(
-                        system_instruction=SYSTEM_PROMPT,
-                        temperature=0.3,
+    def _call_doc():
+        for attempt in range(3):
+            for m in MODELS_CASCADE:
+                try:
+                    response = client.models.generate_content(
+                        model=m,
+                        contents=[
+                            types.Part.from_bytes(data=doc_bytes, mime_type=mime_type),
+                            instruction
+                        ],
+                        config=types.GenerateContentConfig(
+                            system_instruction=SYSTEM_PROMPT,
+                            temperature=0.3,
+                        )
                     )
-                )
-                return response.text.strip()
-            except Exception as ex:
-                logger.error(f"Doc model {m} error: {ex}")
+                    if response and response.text:
+                        return response.text.strip()
+                except Exception as ex:
+                    logger.debug(f"Doc attempt {attempt} model {m} notice: {ex}")
+            time.sleep(1.0)
         return None
 
     loop = asyncio.get_running_loop()
-    res = await loop.run_in_executor(None, _call_gemini_doc_fallback)
+    res = await loop.run_in_executor(None, _call_doc)
     if res:
         return res
 
