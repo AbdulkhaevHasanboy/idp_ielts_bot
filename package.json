@@ -1,0 +1,24 @@
+{
+  "name": "idp_ielts_bot",
+  "version": "1.0.0",
+  "description": "Rasmiy **IDP IELTS Uzbekistan** (Edu-Action) uchun ishlab chiqilgan, Sun'iy Intellekt (Gemini AI Vision & Chat), Telegram Native GPS Map/Venue integratsiyasi va interaktiv trenajyorlar bilan jihozlangan aqlli Telegram bot.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AbdulkhaevHasanboy/idp_ielts_bot.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/AbdulkhaevHasanboy/idp_ielts_bot/issues"
+  },
+  "homepage": "https://github.com/AbdulkhaevHasanboy/idp_ielts_bot#readme",
+  "dependencies": {
+    "puppeteer-core": "^25.8.0",
+    "ws": "^8.21.3"
+  }
+}
