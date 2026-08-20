@@ -62,11 +62,14 @@ Select a component or test format to calculate your score:""",
 
     "register_info": """📝 *IDP IELTS Registration & Pricing:*
 
-💰 *Current Test Fees (Uzbekistan):*
-• *IELTS on Computer:* 2,665,000 UZS
-• *IELTS on Paper:* 2,665,000 UZS
-• *IELTS for UKVI:* 2,850,000 UZS
+💰 *Official Test Fees (Uzbekistan):*
+• *IELTS Academic / General (Computer):* 2,664,000 UZS (~$205)
+• *IELTS for UKVI (Academic/General):* 2,980,000 UZS
+• *IELTS Life Skills (A1/B1):* 2,627,000 UZS
 • *One Skill Retake (OSR):* 1,850,000 UZS
+
+🏛 *State Compensation (my.gov.uz):*
+In Uzbekistan, candidates who score *Band 7.0 (C1)* or higher on the official exam can apply via the [my.gov.uz](https://my.gov.uz) portal for 100% government reimbursement of their exam fee!
 
 📌 *Registration Steps:*
 1. Visit [ielts.idp.com/uzbekistan](https://ielts.idp.com/uzbekistan).

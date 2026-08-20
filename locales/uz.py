@@ -62,11 +62,14 @@ Qaysi modul yoki test turining balini hisoblamoqchisiz?""",
 
     "register_info": """📝 *IDP IELTS Imtihoniga Ro'yxatdan O'tish va Narxlar:*
 
-💰 *Joriy narxlar (O'zbekiston):*
-• *IELTS on Computer:* 2,665,000 UZS
-• *IELTS on Paper:* 2,665,000 UZS
-• *IELTS for UKVI:* 2,850,000 UZS
+💰 *Joriy rasmiy narxlar (O'zbekiston):*
+• *IELTS Academic / General (Computer):* 2,664,000 UZS
+• *IELTS for UKVI (Academic/General):* 2,980,000 UZS
+• *IELTS Life Skills (A1/B1):* 2,627,000 UZS
 • *One Skill Retake (OSR):* 1,850,000 UZS
+
+🏛 *Davlat Kompensatsiyasi (my.gov.uz):*
+O'zbekistonda rasmiy imtihonda *7.0 (C1)* yoki undan yuqori ball to'plagan yoshlar [my.gov.uz](https://my.gov.uz) portali orqali imtihon xarajatini davlatdan 100% to'liq qaytarib olishlari (kompensatsiya) mumkin!
 
 📌 *Ro'yxatdan o'tish bosqichlari:*
 1. [ielts.idp.com/uzbekistan](https://ielts.idp.com/uzbekistan) rasmiy saytiga kiring.

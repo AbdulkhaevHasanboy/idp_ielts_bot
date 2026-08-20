@@ -62,11 +62,14 @@ STRINGS = {
 
     "register_info": """📝 *Регистрация на IDP IELTS и Стоимость:*
 
-💰 *Актуальные цены (Узбекистан):*
-• *IELTS on Computer:* 2 665 000 сум
-• *IELTS on Paper:* 2 665 000 сум
-• *IELTS for UKVI:* 2 850 000 сум
+💰 *Официальные цены (Узбекистан):*
+• *IELTS Academic / General (Computer):* 2 664 000 сум
+• *IELTS for UKVI (Academic/General):* 2 980 000 сум
+• *IELTS Life Skills (A1/B1):* 2 627 000 сум
 • *One Skill Retake (OSR):* 1 850 000 сум
+
+🏛 *Государственная компенсация (my.gov.uz):*
+В Узбекистане кандидаты, сдавшие экзамен на балл *7.0 (C1)* и выше, могут подать заявку через портал [my.gov.uz](https://my.gov.uz) на 100% возмещение стоимости экзамена государством!
 
 📌 *Шаги для регистрации:*
 1. Перейдите на [ielts.idp.com/uzbekistan](https://ielts.idp.com/uzbekistan).

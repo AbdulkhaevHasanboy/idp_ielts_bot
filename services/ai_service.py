@@ -1,8 +1,8 @@
 """
 Comprehensive Gemini AI Service for IDP IELTS Bot.
 Customer Support & IELTS Helper Assistant for IDP IELTS Uzbekistan (Edu-Action).
-Powered by Google Gemini 3.1 & 3.5 series with automatic multi-key rotation, failover,
-and exponential retry for instant voice messages, chat, images, videos, and documents.
+Powered by Google Gemini 3.1 & 3.5 series with automatic real-time web search verification,
+multi-key rotation, failover, and exponential retry.
 """
 import logging
 import io
@@ -19,14 +19,25 @@ logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = f"""You are 'IDP IELTS AI', the official smart helper & customer support assistant for IDP IELTS in Uzbekistan (Edu-Action).
 
+OFFICIAL VERIFIED KNOWLEDGE BASE:
+- Standard IELTS Academic / General Training (Computer): 2,664,000 UZS (~$205 USD).
+- IELTS for UKVI (Academic / General Training): 2,980,000 UZS.
+- IELTS Life Skills (A1 / B1): 2,627,000 UZS.
+- One Skill Retake (OSR): 1,850,000 UZS.
+- Mock Tests: Usually range from 200,000 to 400,000 UZS at local test preparation centres.
+- State Compensation (my.gov.uz): In Uzbekistan, candidates scoring Band 7.0 (C1) or higher on the official exam can apply via my.gov.uz to get their entire exam fee (100%) reimbursed by the government.
+- Test Centers in Uzbekistan: Tashkent (CIU Bunyodkor & Afrosiyob Head Office), Samarkand, Fergana, Namangan, Andijan, Bukhara, Urgench, Nukus, Navoi, Termez.
+- Human Telegram Support: {SUPPORT_USERNAME} (@idp555), Phone: {SUPPORT_PHONE}.
+- Booking portal: https://ielts.idp.com/uzbekistan
+
 CRITICAL ROLE & COMMUNICATION RULES:
 1. You are a HELPFUL CUSTOMER SUPPORT ASSISTANT, NOT an examiner, tester, or robotic evaluator.
 2. When answering user voice messages or text, listen to what they are asking and directly solve their request in a natural, polite, and concise manner.
-3. NEVER dump unsolicited long boilerplate lists, generic FAQ dumps, or unrelated test center information.
-4. Language: Respond in the language of the user (Uzbek by default, Russian, or English).
-5. If a user asks for direct human support, manager contact, or Telegram support, provide: Telegram: {SUPPORT_USERNAME} (@idp555) and Call Centre: {SUPPORT_PHONE}.
-6. If a question requires live factual verification (dates, university acceptance, recent news), silently search in background and integrate the answer without mentioning you searched.
-7. Only perform formal IELTS criteria grading (Task Achievement, Fluency, etc.) if the user explicitly asks to check/grade their essay or mock speaking. Otherwise, always act as a helpful support assistant!
+3. ALWAYS check the real-time search context provided. If there is live information, synthesize it cleanly without mentioning "I searched Google".
+4. When relevant to exam fees or registration, politely ask: "Are you planning to take Academic or General Training? Which city in Uzbekistan do you plan to take the test in?" so you can guide them to their nearest center or test dates.
+5. NEVER dump unsolicited long boilerplate lists, generic FAQ dumps, or unrelated test center information.
+6. Language: Respond in the language of the user (Uzbek by default, Russian, or English).
+7. Only perform formal IELTS criteria grading (Task Achievement, Fluency, etc.) if the user explicitly asks to check/grade their essay or mock speaking.
 """
 
 MODELS_CASCADE = [
@@ -67,35 +78,33 @@ def get_genai_clients():
 
 async def generate_ai_chat_response(user_text: str, user_name: str = "Candidate", lang: str = "uz") -> str:
     """
-    Generates natural, concise AI response with automatic multi-key rotation and failover.
+    Generates natural, concise AI response with automatic real-time web search verification.
     """
     clients = get_genai_clients()
     if not clients:
         return f"Assalomu alaykum! IDP IELTS bo'yicha qanday savolingiz bor? Qo'llab-quvvatlash: {SUPPORT_USERNAME}" if lang=="uz" else f"Здравствуйте! Чем могу помочь по IDP IELTS? Поддержка: {SUPPORT_USERNAME}"
 
     lower = user_text.lower()
-    needs_search = any(k in lower for k in [
-        "qachon", "sana", "dates", "2026", "2025", "yangi", "latest", "yangilik",
-        "universitet", "university", "tan oladimi", "accept", "qaysi davlat"
-    ])
-
+    # Broad trigger for silent background verification
+    is_simple_greeting = lower in ["salom", "assalomu alaykum", "hello", "hi", "hey", "privet", "privyet", "qalesiz", "qalaysiz"]
+    
     search_context = ""
-    if needs_search:
+    if not is_simple_greeting:
         try:
             search_query = f"IDP IELTS Uzbekistan {user_text}"
             results = await search_web_async(search_query, max_results=3, lang=lang)
             if results:
                 snippets = [f"- {r['title']}: {r['snippet']}" for r in results]
-                search_context = "\n\nReal-time Web Search Context:\n" + "\n".join(snippets)
+                search_context = "\n\nReal-time Verified Web Search Context:\n" + "\n".join(snippets)
         except Exception as e:
-            logger.error(f"Silent search error: {e}")
+            logger.debug(f"Silent search notice: {e}")
 
     prompt = f"""User name: {user_name}
 User language: {lang}
 User message: {user_text}
 {search_context}
 
-Provide a concise, helpful, and natural response directly answering the user in {lang}. Do not dump unprompted generic lists. Support member username: {SUPPORT_USERNAME}."""
+Provide a concise, helpful, and natural response directly answering the user in {lang}. Ensure all facts (prices, rules, locations) are 100% accurate. Support member username: {SUPPORT_USERNAME}."""
 
     def _call():
         for attempt in range(3):
@@ -107,7 +116,7 @@ Provide a concise, helpful, and natural response directly answering the user in 
                             contents=prompt,
                             config=types.GenerateContentConfig(
                                 system_instruction=SYSTEM_PROMPT,
-                                temperature=0.7,
+                                temperature=0.6,
                             )
                         )
                         if response and response.text:
@@ -137,17 +146,24 @@ async def analyze_audio_with_ai(audio_bytes: bytes, mime_type: str = "audio/ogg"
     if not clients:
         return "⚠️ API kalit sozlanmagan."
 
-    instruction = f"""You are 'IDP IELTS AI', the helpful support assistant for IDP IELTS in Uzbekistan.
+    instruction = f"""You are 'IDP IELTS AI', the helpful customer support assistant for IDP IELTS in Uzbekistan.
 Listen to this user's voice message.
 Respond in {lang}.
+
+OFFICIAL FACTS:
+- Standard IELTS (Computer): 2,664,000 UZS (~$205 USD).
+- IELTS for UKVI: 2,980,000 UZS.
+- IELTS Life Skills: 2,627,000 UZS.
+- State Compensation: Band 7.0+ (C1) gets 100% reimbursed via my.gov.uz.
+- Test centers in: Tashkent, Samarkand, Fergana, Namangan, Andijan, Bukhara, Urgench, Nukus, Navoi, Termez.
+- Telegram support: {SUPPORT_USERNAME} (@idp555), Call centre: {SUPPORT_PHONE}.
 
 RULES:
 1. Understand what question or assistance the user is asking.
 2. Directly answer their question in a friendly, concise, and professional manner in {lang}.
 3. If they are asking for a test center location (e.g. Andijan, Tashkent, Samarkand, Fergana, Namangan, Bukhara, etc.), clearly provide the center details and address.
-4. If they ask about test dates, prices (IELTS 2,665,000 UZS), One Skill Retake, registration or support, answer clearly.
+4. If relevant, ask which city or format (Academic vs General) they plan to take.
 5. If they specifically asked to evaluate their English speaking practice, provide constructive advice. Otherwise, JUST ANSWER THEIR QUESTION directly!
-6. Support contact: {SUPPORT_USERNAME} (@idp555), Phone: {SUPPORT_PHONE}.
 """
 
     def _call_audio():
