@@ -44,8 +44,17 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+from services.keep_alive import start_keep_alive_server
+
 async def post_init(application):
-    """Set up dynamic bot commands in the menu."""
+    """Set up dynamic bot commands and launch 24/7 keep-alive web server."""
+    # 1. Start Keep-Alive HTTP health check server and 5-minute Render self-pinger
+    try:
+        await start_keep_alive_server()
+    except Exception as e:
+        logger.error(f"Keep-Alive server error: {e}")
+
+    # 2. Set bot commands
     commands = [
         BotCommand("start", "Botni ishga tushirish / Главное меню"),
         BotCommand("quiz", "Kunlik IELTS Mashqi / Ежедневный квиз"),
