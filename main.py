@@ -2,13 +2,14 @@
 Main entry point for IDP IELTS Uzbekistan AI Telegram Bot.
 """
 import logging
-from telegram import BotCommand
+from telegram import BotCommand, Update
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     CallbackQueryHandler,
     MessageHandler,
-    filters
+    filters,
+    ContextTypes
 )
 
 from config import BOT_TOKEN
@@ -37,6 +38,7 @@ from handlers.media import (
     handle_animation,
     handle_document
 )
+from services.keep_alive import start_keep_alive_server
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -44,7 +46,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-from services.keep_alive import start_keep_alive_server
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Log errors caused by Updates gracefully without crashing."""
+    logger.warning(f"Telegram error handled gracefully: {context.error}")
 
 async def post_init(application):
     """Set up dynamic bot commands and launch 24/7 keep-alive web server."""
@@ -83,6 +87,9 @@ def main():
         .post_init(post_init)
         .build()
     )
+
+    # Error handler
+    application.add_error_handler(error_handler)
 
     # 3. Register Command Handlers
     application.add_handler(CommandHandler("start", cmd_start))
